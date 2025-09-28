@@ -159,6 +159,9 @@ useFvgSignals = input.bool(true, 'Trade FVG Fills', group = group_fvg_trading)
 useInversionFvg = input.bool(true, 'Trade Inversion FVG', group = group_fvg_trading)
 fvgAsTP = input.bool(true, 'Use FVG as Take Profit', group = group_fvg_trading)
 fvgMinSize = input.float(0.1, 'Min FVG Size %', minval = 0.0, group = group_fvg_trading)
+plotFvgMarkers = input.bool(true, 'Show FVG Markers', group = group_fvg_trading)
+fvgRequireClose = input.bool(true, 'Require Close Inside Gap', group = group_fvg_trading)
+fvgMaxAgeBars = input.int(250, 'Max FVG Age (bars)', minval = 0, group = group_fvg_trading)
 // --- ATR Adaptive Engine ---
 group_atr_adaptive = 'ATR Adaptive Engine'
 useAtrAdaptive = input.bool(true, 'Enable ATR Adaptive Filter', group = group_atr_adaptive)
@@ -646,7 +649,7 @@ f_get_opposite_fvg_target(bool isLong, float entry) =>
                 tgt := na(tgt) ? candidate : math.max(tgt, candidate)
     na(tgt) ? na : round_tick(tgt)
 f_register_fvg_marker(array<label> storage, float price, string txt, color txtColor, bool isLong) =>
-    if showVisual
+    if showVisual and plotFvgMarkers
         label lb = label.new(bar_index, price, txt, style = isLong ? label.style_label_up : label.style_label_down, color = color(na), textcolor = txtColor, size = size.small)
         array.push(storage, lb)
         manage_array_of_labels(storage, FVG_MARKER_LIMIT)
@@ -1171,10 +1174,12 @@ if needFvgProcessing and bar_index > 4
             float zoneRange = math.max(math.abs(zoneHigh - zoneLow), syminfo.mintick)
             bool priceTouched = fvg.isBullish ? low <= zoneHigh : high >= zoneLow
             bool closeInside = close <= zoneHigh and close >= zoneLow
+            bool fillConfirmed = priceTouched and (closeInside or not fvgRequireClose)
             bool oldEnough = bar_index > fvg.createdBarIndex
             float sizePct = f_fvg_size_pct(fvg)
             bool sizeOk = sizePct >= fvgMinSize
             bool inversionBreak = fvg.isBullish ? close < zoneLow : close > zoneHigh
+            bool ageExpired = fvgMaxAgeBars > 0 and bar_index - fvg.createdBarIndex > fvgMaxAgeBars
             bool removeZone = false
 
             if oldEnough and sizeOk and priceTouched
@@ -1225,7 +1230,7 @@ if needFvgProcessing and bar_index > 4
                                 f_register_fvg_marker(ifvg_labels, f_fvg_mid(fvg), 'IFVG', isLong ? buyColor : sellColor, isLong)
                         removeZone := true
 
-                if not removeZone and useFvgSignals and closeInside and strategy.position_size == 0 and sessionOk
+                if not removeZone and useFvgSignals and fillConfirmed and strategy.position_size == 0 and sessionOk
                     bool isLong = fvg.isBullish
                     bool htfOk = isLong ? inHtfZoneLong : inHtfZoneShort
                     bool tradeModeOk = isLong ? tradeModeLongOk : tradeModeShortOk
@@ -1266,7 +1271,8 @@ if needFvgProcessing and bar_index > 4
                                 f_register_fvg_marker(fvg_fill_labels, f_fvg_mid(fvg), 'FVG', isLong ? buyColor : sellColor, isLong)
                         removeZone := true
 
-            if fvg.isBullish ? low <= fvg.top : high >= fvg.bottom
+            bool invalidated = fvg.isBullish ? low < zoneLow : high > zoneHigh
+            if fillConfirmed or inversionBreak or invalidated or ageExpired
                 removeZone := true
 
             if removeZone
