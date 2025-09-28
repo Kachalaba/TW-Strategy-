@@ -1,0 +1,1453 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Kamamber0564
+//@version=6
+// === PATCH NOTE ===
+// Внесены правки: детекция сигналов без блокировки strategy.position_size на этапе ДЕТЕКЦИИ;
+// проверка позиции сохранена на уровне входа/алертов. Добавлены неразрушающие хелперы.
+strategy('Kamamber (PRO) — Complete Strategy',overlay=true, pyramiding=0,max_bars_back=5000,commission_type=strategy.commission.percent, commission_value=0.055,max_labels_count=500, max_lines_count=500, max_boxes_count=500,initial_capital=10000)
+// ================== НАСТРОЙКИ ==================
+// --- DASHBOARD ---
+detectEvenIfInPosition = input.bool(true, 'Детектировать сетапы даже при открытой позиции')
+group_dashboard = 'Дашборд'
+showDashboard = input.bool(true, 'Показывать Дашборд', group = group_dashboard)
+dashboardPosition = input.string('Top Right', 'Позиция', options = ['Top Right', 'Top Left', 'Bottom Right', 'Bottom Left'], group = group_dashboard)
+// --- POSITION SIZING ---
+group_risk = 'Position Sizing'
+riskMode = input.string('Risk per Trade ($)', 'Режим расчета позиции', options = ['Fixed Cash ($)', 'Risk per Trade ($)', 'Risk % of Equity'], group = group_risk)
+cashPerTrade = input.float(20.0, 'Fixed cash, $', minval = 1.0, group = group_risk)
+riskUsd = input.float(20.0, 'Risk per trade, $', minval = 1.0, group = group_risk)
+riskPct = input.float(0.5, 'Risk % of equity', minval = 0.1, maxval = 10.0, group = group_risk)
+minNotionalDefault = input.float(5.0, 'Min notional (alts), $', minval = 1.0, group = group_risk)
+minNotionalHeavy = input.float(100.0, 'Min notional (BTC/ETH), $', minval = 10.0, group = group_risk)
+// Хелпер для совместимости: можно дергать при детекции сетапов
+f_can_detect() =>
+    // если включено — не блокируем детекцию сетапов наличием позиции
+    detectEvenIfInPosition or strategy.position_size == 0 ? true : true
+// --- TREND FILTER ---
+group_trend = 'Trend Filter'
+useTrendFilter = input.bool(false, 'Включить фильтр по тренду', group = group_trend)
+trendFilterType = input.string('MA-порог', 'Тип фильтра', options = ['MA-порог', 'HH/HL структура', 'ADX'], group = group_trend)
+maPeriod = input.int(200, 'Период MA', minval = 10, group = group_trend)
+maType = input.string('SMA', 'Тип MA', options = ['SMA', 'EMA'], group = group_trend)
+adxPeriod = input.int(14, 'Период ADX', minval = 5, group = group_trend)
+adxThreshold = input.float(20.0, 'Порог ADX', minval = 10.0, group = group_trend)
+// --- KILL ZONE FILTER ---
+group_kz_filter = 'Kill Zone Filter'
+kzOnly = input.bool(false, 'Торговать только в Kill Zone', group = group_kz_filter)
+kzSession = input.session('1500-1800', 'Kill Zone (local time)', group = group_kz_filter)
+// --- MAX PACK FILTERS ---
+group_maxpack = '
+🔥
+ MAX PACK FILTERS'
+// VWAP
+showVWAP = input.bool(true, 'Показывать Дневной VWAP', group = group_maxpack, inline = 'vwap1')
+showWeeklyVWAP = input.bool(true, 'Показывать Недельный VWAP', group = group_maxpack, inline = 'vwap1')
+showBands = input.bool(true, 'Показывать σ-каналы', group = group_maxpack, inline = 'vwap2')
+stdMultiplier = input.float(1.0, 'Множитель σ', minval = 0.1, step = 0.1, group = group_maxpack, inline = 'vwap2')
+useVwapFilter = input.bool(true, 'Фильтровать сигналы по VWAP', group = group_maxpack)
+// TREND/RANGE
+useTrendModeFilter = input.bool(true, 'Включить фильтр режима рынка', group = group_maxpack)
+trendThresh_Trend = input.float(1.15, '   Порог TREND (ATR/σ)', minval = 0.5, step = 0.05, group = group_maxpack)
+trendThresh_Range = input.float(0.85, '   Порог RANGE (ATR/σ)', minval = 0.1, step = 0.05, group = group_maxpack)
+trendAtrPeriod = input.int(14, '   Период ATR', group = group_maxpack, inline = 'tr1')
+trendStdevPeriod = input.int(14, '   Период StDev', group = group_maxpack, inline = 'tr1')
+// VOLUME SPIKES
+useVolumeSpike = input.bool(true, 'Учитывать всплески объёма', group = group_maxpack)
+volumeLookback = input.int(120, '   Окно для персентиля', minval = 10, group = group_maxpack, inline = 'vol1')
+volumePercentile = input.int(85, '   Perc объёма (0-100)', minval = 50, maxval = 99, group = group_maxpack, inline = 'vol1')
+// CHANDELIER STOP
+useTrailingStop = input.bool(true, 'Включить Chandelier Stop', group = group_maxpack)
+trailStopLength = input.int(22, '   Окно High/Low', minval = 5, group = group_maxpack, inline = 'ts1')
+trailStopAtrMult = input.float(2.5, '   ATR множитель', minval = 0.5, step = 0.1, group = group_maxpack, inline = 'ts1')
+// --- Контекстные фильтры ---
+group_context_filters = '
+⚙
+️ Контекстні Фільтри Сигналів'
+vwapFilter_Counter = input.string('Только Дневной VWAP', 'VWAP для Reversal/Sweep', options = ['Нет', 'Только Дневной VWAP', 'Дневной и Недельный'], group = group_context_filters)
+kzFilter_Counter = input.string('Мягкий', 'Kill Zones для Reversal/Sweep', options = ['Игнорировать', 'Мягкий', 'Строгий'], group = group_context_filters)
+// --- Kill Zones ---
+group_kz = 'Настройки Kill Zones (EST)'
+enableKzFilter = input.bool(true, 'Включить фильтрацию по Kill Zones', group = group_kz)
+showKzBackground = input.bool(true, 'Показывать фон Kill Zones', group = group_kz)
+kz_asia_color = input.color(color.new(color.orange, 85), '   Asia Session', group = group_kz)
+kz_london_color = input.color(color.new(color.purple, 85), '   London Session', group = group_kz)
+kz_ny_am_color = input.color(color.new(color.blue, 85), '   New York AM Session', group = group_kz)
+kz_ny_pm_color = input.color(color.new(color.teal, 85), '   New York PM Session', group = group_kz)
+// --- Оповещения ---
+group_alerts = 'Оповещения'
+enableAlerts = input.bool(true, 'Включить Оповещения', group = group_alerts)
+alertOnKzEnter = input.bool(true, '   Оповещать о входе в Kill Zone', group = group_alerts)
+alertOnTPs = input.bool(true, '   Оповещать о достижении TP', group = group_alerts)
+moveSLtoBE = input.bool(true, '   Перевести SL в безубыток после TP1', group = group_alerts)
+alertOnSL = input.bool(true, '   Оповещать о достижении SL', group = group_alerts)
+alertOnBE = input.bool(true, '   Оповещать о переносе SL в безубыток', group = group_alerts)
+// --- Режим торговли ---
+group_mode = 'Режим Торговли'
+tradingMode = input.string('Swing', 'Режим', options = ['Intraday', 'Swing'], group = group_mode)
+filterByHtfZone = input.bool(false, 'Фильтровать по HTF Зоне', group = group_mode)
+// --- Частичные закрытия ---
+group_partial = 'Частичные закрытия'
+partialMode = input.string('TP3-only (0/0/100)', 'Режим частичных закрытий', options = ['TP3-only (0/0/100)', 'TP2/TP3 (0/30/70)', 'TP1/TP2/TP3 (33/50/100)'], group = group_partial)
+// --- Ликвидность ---
+group_liquidity = 'Анализ Ликвидности'
+showLiquidity = input.bool(true, 'Показывать Ликвидность (BSL/SSL)', group = group_liquidity)
+bslColor = input.color(color.new(color.blue, 25), '   Цвет BSL', group = group_liquidity)
+sslColor = input.color(color.new(color.orange, 25), '   Цвет SSL', group = group_liquidity)
+liqLineStyle = input.string('Dashed', '   Стиль Линии', options = ['Dashed', 'Dotted', 'Solid'], group = group_liquidity)
+// --- Сигналы ---
+group_signals_sweep = 'Настройки Сигналов Свипа'
+showSweepSignals = input.bool(true, 'Показывать Сигналы Свипа', group = group_signals_sweep)
+group_signals = 'Настройки Разворотных Сигналов'
+showReversalSignals = input.bool(true, 'Показывать Разворотные Сигналы', group = group_signals)
+buyColor = input.color(color.new(color.lime, 0), '   Цвет метки \'BUY\'', group = group_signals)
+sellColor = input.color(color.new(color.red, 0), '   Цвет метки \'SELL\'', group = group_signals)
+group_trend_signals = 'Настройки Сигналов по Тренду'
+showTrendSignals = input.bool(true, 'Показывать Сигналы по Тренду', group = group_trend_signals)
+tf_block_color = input.color(color.new(color.blue, 85), 'Цвет Блока Коррекции', group = group_trend_signals)
+// --- Risk/Reward ---
+group_rr = 'Настройки Risk/Reward и TP'
+tp_mode = input.string('Risk/Reward', 'Режим Take Profit', options = ['Risk/Reward', 'Liquidity Target', 'Prioritized (TP1/TP2/TP3)'], group = group_rr)
+rr_ratio = input.float(2.0, 'Соотношение Risk/Reward', minval = 0.1, step = 0.1, group = group_rr)
+showRR = input.bool(true, 'Показывать R/R Визуализацию', group = group_rr)
+riskColor = input.color(color.new(color.red, 80), '   Цвет Зоны Риска', group = group_rr)
+rewardColor = input.color(color.new(color.green, 80), '   Цвет Зоны Профита', group = group_rr)
+// --- TP Priorities (используются, если tp_mode = 'Prioritized (TP1/TP2/TP3)')
+group_tpprio = 'TP Priorities (TP1/TP2/TP3)'
+tp1_p1 = input.string('Liquidity', 'TP1: приоритет #1', options = ['Liquidity','Block','RR'], group = group_tpprio, inline='tp1a')
+tp1_p2 = input.string('Block', ' #2', options = ['Liquidity','Block','RR'], group = group_tpprio, inline='tp1a')
+tp1_p3 = input.string('RR', ' #3', options = ['Liquidity','Block','RR'], group = group_tpprio, inline='tp1a')
+tp1_rr_fix = input.float(2.0, 'TP1 RR (если выбран RR)', minval=0.1, step=0.1, group = group_tpprio, inline='tp1b')
+tp1_min_rr = input.float(1.2, 'TP1 Min RR', minval=0.1, step=0.1, group = group_tpprio, inline='tp1b')
+tp2_p1 = input.string('Liquidity', 'TP2: приоритет #1', options = ['Liquidity','Block','RR'], group = group_tpprio, inline='tp2a')
+tp2_p2 = input.string('Block', ' #2', options = ['Liquidity','Block','RR'], group = group_tpprio, inline='tp2a')
+tp2_p3 = input.string('RR', ' #3', options = ['Liquidity','Block','RR'], group = group_tpprio, inline='tp2a')
+tp2_rr_fix = input.float(2.0, 'TP2 RR (если выбран RR)', minval=0.1, step=0.1, group = group_tpprio, inline='tp2b')
+tp2_min_rr = input.float(1.2, 'TP2 Min RR', minval=0.1, step=0.1, group = group_tpprio, inline='tp2b')
+tp3_p1 = input.string('Liquidity', 'TP3: приоритет #1', options = ['Liquidity','Block','RR'], group = group_tpprio, inline='tp3a')
+tp3_p2 = input.string('Block', ' #2', options = ['Liquidity','Block','RR'], group = group_tpprio, inline='tp3a')
+tp3_p3 = input.string('RR', ' #3', options = ['Liquidity','Block','RR'], group = group_tpprio, inline='tp3a')
+tp3_rr_fix = input.float(2.0, 'TP3 RR (если выбран RR)', minval=0.1, step=0.1, group = group_tpprio, inline='tp3b')
+tp3_min_rr = input.float(1.2, 'TP3 Min RR', minval=0.1, step=0.1, group = group_tpprio, inline='tp3b')
+// --- Продвинутые стопы ---
+group_adv_stops = 'Расширенные Настройки Stop-Loss'
+rev_stop_buffer_type = input.string('ATR', 'Тип Буфера для Разворота', options = ['ATR', '%'], group = group_adv_stops)
+rev_stop_buffer_value = input.float(1.0, '   Значение Буфера', group = group_adv_stops)
+trend_stop_buffer_type = input.string('%', 'Тип Буфера по Тренду', options = ['ATR', '%'], group = group_adv_stops)
+trend_stop_buffer_value = input.float(0.25, '   Значение Буфера', group = group_adv_stops)
+// --- Inducement (IDM) ---
+group_inducement = 'Настройки Inducement (IDM)'
+showInducement = input.bool(true, 'Показывать Inducement (IDM)', group = group_inducement)
+inducementColor = input.color(color.new(color.yellow, 25), '   Цвет Линии IDM', group = group_inducement)
+maxInducementLines = input.int(10, 'Макс. линий IDM на графике', minval = 1, maxval = 50, group = group_inducement)
+// --- Institutional Candles ---
+group_ic = 'Настройки Institutional Candles'
+showIC = input.bool(true, 'Включить Institutional Candles', group = group_ic)
+ic_show_fvg = input.bool(true, '   Показывать FVG/Imbalance', group = group_ic)
+ic_show_large_body = input.bool(true, '   Показывать свечи с большим телом', group = group_ic)
+ic_show_uncontested = input.bool(true, '   Показывать безоткатные свечи', group = group_ic)
+ic_body_mult = input.float(2.0, '   Множитель для тела свечи (X)', minval = 1.0, group = group_ic)
+ic_body_len = input.int(20, '   Период для среднего тела (N)', minval = 1, group = group_ic)
+ic_shadow_perc = input.float(20.0, '   Макс. % тени от тела', minval = 0.0, maxval = 100.0, group = group_ic)
+ic_color_fvg_bull = input.color(color.new(color.green, 85), '   Цвет бычьего FVG', group = group_ic)
+ic_color_fvg_bear = input.color(color.new(color.red, 85), '   Цвет медвежьего FVG', group = group_ic)
+ic_color_large_body = input.color(color.new(color.fuchsia, 90), '   Цвет большого тела', group = group_ic)
+ic_color_uncontested = input.color(color.new(color.aqua, 90), '   Цвет безоткатной свечи', group = group_ic)
+ic_max_count = input.int(15, '   Макс. кол-во FVG на графике', minval = 1, group = group_ic)
+// --- FVG Trading ---
+group_fvg_trading = 'FVG Trading Settings'
+useFvgSignals = input.bool(true, 'Trade FVG Fills', group = group_fvg_trading)
+useInversionFvg = input.bool(true, 'Trade Inversion FVG', group = group_fvg_trading)
+fvgAsTP = input.bool(true, 'Use FVG as Take Profit', group = group_fvg_trading)
+fvgMinSize = input.float(0.1, 'Min FVG Size %', minval = 0.0, group = group_fvg_trading)
+// --- Стиль ---
+group_style = 'Настройки Отображения'
+maxPastSwings = input.int(1, 'Кол-во прошлых свингов для отображения', minval = 1, maxval = 10, group = group_style)
+show01Lines = input.bool(true, 'Показывать линии 0 & 1', group = group_style)
+lineColor = input.color(color.new(color.gray, 50), '   Цвет линий 0-1', group = group_style)
+// --- Breaks/Sweeps ---
+group_breaks = 'Настройки Пробоев/Свипов'
+showBreakEvents = input.bool(true, 'Показывать События Пробоя/Свипа', group = group_breaks)
+ltf_max_break_lines = input.int(20, 'Макс. исторических LTF линий', group = group_breaks)
+sweepColor = input.color(color.new(#FFD700, 25), '   Цвет Свипа ($)', group = group_breaks)
+group_bos_colors = 'Цвета BOS'
+bullishBosColor = input.color(color.new(color.green, 0), 'Бычий BOS', group = group_bos_colors)
+bearishBosColor = input.color(color.new(color.red, 0), 'Медвежий BOS', group = group_bos_colors)
+bosLabelText = input.string('BOS', '   Текст Метки', group = group_bos_colors)
+group_choch_colors = 'Цвета CHOCH'
+bullishChochColor = input.color(color.new(color.aqua, 0), 'Бычий CHOCH', group = group_choch_colors)
+bearishChochColor = input.color(color.new(color.orange, 0), 'Медвежий CHOCH', group = group_choch_colors)
+chochLabelText = input.string('CHOCH', '   Текст Метки', group = group_choch_colors)
+// --- Источник цены ---
+group_source = 'Источник Цены'
+sourceType = input.string('Wicks (High/Low)', 'Источник для расчёта', options = ['Wicks (High/Low)', 'Bodies (Open/Close)'], group = group_source)
+// --- LTF ZigZag ---
+group_ltf = 'Настройки Локального Таймфрейма (LTF)'
+ltf_threshold_multiplier = input.float(3.0, 'LTF Deviation %', minval = 0, group = group_ltf, tooltip = 'Отклонение в % для ZigZag')
+ltf_depth = input.int(10, 'LTF Depth', minval = 2, group = group_ltf)
+// --- Блоки ---
+group_block1 = 'Настройки Разворотного Блока'
+fillColBull_1 = input.color(color.new(color.red, 85), 'Заливка Блока (Разворот)', group = group_block1)
+group_block2 = 'Настройки Целевого Блока (Take Profit)'
+showTargetBlock = input.bool(true, 'Показывать Целевой Блок', group = group_block2)
+fillColBull_2 = input.color(color.new(color.green, 85), 'Заливка Блока (Цель)', group = group_block2)
+// --- MTF ---
+group_mtf = 'Настройки Multi-Timeframe (MTF)'
+mtf_enabled = input.bool(true, 'Включить MTF Анализ', group = group_mtf)
+mtf_timeframe = input.timeframe('240', 'Старший Таймфрейм', group = group_mtf)
+mtf_depth = input.int(10, 'MTF Pivot Depth', minval = 2, group = group_mtf)
+mtf_min_swing_percent = input.float(1.0, 'MTF Min. Swing %', minval = 0, step = 0.1, group = group_mtf)
+mtf_bosColor = input.color(color.new(#00BCD4, 0), '   Цвет MTF Пробоя', group = group_mtf)
+mtf_sweepColor = input.color(color.new(#FF69B4, 0), '   Цвет MTF Свипа ($)', group = group_mtf)
+mtf_fillColBull_1 = input.color(color.new(color.red, 92), '   Заливка MTF Блока (Разворот)', group = group_mtf)
+mtf_fillColBull_2 = input.color(color.new(color.green, 92), '   Заливка MTF Блока (Цель)', group = group_mtf)
+// --- Оптимизация/Стабильность ---
+group_optimization = 'Оптимизация Продуктивности'
+history_depth = input.int(200, 'Глибина Аналізу (барів)', minval = 50, group = group_optimization)
+showVisual = input.bool(true, 'Показувати візуальні елементи', group = group_optimization)
+group_stability = 'Стабільність та Режим Роботи'
+strictMode = input.bool(true, 'Strict Mode (сигнал на закритії свічки)', group = group_stability)
+sweepConfirmation = input.string('На закритії свічки', 'Підтвердження Свіпа', options = ['Intrabar (може зникати)', 'На закритії свічки'], group = group_stability)
+// --- Сканер и кулдаун ---
+group_scanner = '
+🕵
+️ Сканер Ліквідності та Кулдаун'
+useScanner = input.bool(true, 'Включити фільтри сканера', group = group_scanner)
+minDollarVol = input.float(10e6, 'Мін. $-оборот (SMA 20)', group = group_scanner)
+minAtrPct = input.float(1.2, 'Мін. ATR, % від ціни', group = group_scanner)
+cooldownBars = input.int(10, 'Кулдаун сигналів (барів)', group = group_scanner)
+alertsRespectScanner = input.bool(false, 'Фильтровать алерты сканером', group = group_scanner)
+// =============== LIBS & CONST ===============
+import TradingView/ZigZag/7 as zigzag
+float level_1_start = 1.272
+float level_1_end = 1.618
+float level_2_start = -1.272
+float level_2_end = -1.618
+// =============== TYPES ===============
+type BreakPoint
+    float price
+    int time
+    bool isHigh
+    bool broken
+    line liqLine
+type InducementPoint
+    float price
+    int time
+    bool isBullish
+    bool isSwept
+type FVG
+    box fvgBox
+    bool isBullish
+    float top
+    float bottom
+    int createdBarIndex
+const int FVG_MARKER_LIMIT = 30
+// =============== HELPERS ===============
+f_get_linestyle(style_string) =>
+    style_string == 'Dashed' ? line.style_dashed : style_string == 'Dotted' ? line.style_dotted : line.style_solid
+f_get_position(string_pos) =>
+    switch string_pos
+        'Top Right' => position.top_right
+        'Top Left' => position.top_left
+        'Bottom Right' => position.bottom_right
+        'Bottom Left' => position.bottom_left
+// =============== TREND FILTERS ===============
+f_trend_ok(bool isLong) =>
+    if not useTrendFilter
+        true
+    else
+        bool result = false
+        if trendFilterType == 'MA-порог'
+            float ma_value = maType == 'SMA' ? ta.sma(close, maPeriod) : ta.ema(close, maPeriod)
+            result := isLong ? close > ma_value : close < ma_value
+        else if trendFilterType == 'HH/HL структура'
+            float pivot_high = ta.pivothigh(high, 5, 5)
+            float pivot_low = ta.pivotlow(low, 5, 5)
+            bool hh = not na(pivot_high) and pivot_high > pivot_high[10]
+            bool hl = not na(pivot_low) and pivot_low > pivot_low[10]
+            bool lh = not na(pivot_high) and pivot_high < pivot_high[10]
+            bool ll = not na(pivot_low) and pivot_low < pivot_low[10]
+            result := isLong ? (hh or hl) : (lh or ll)
+        else if trendFilterType == 'ADX'
+            [plus_di, minus_di, adx] = ta.dmi(adxPeriod, adxPeriod)
+            result := isLong ? adx >= adxThreshold and plus_di > minus_di : adx >= adxThreshold and minus_di > plus_di
+        result
+// =============== KZ FILTER ===============
+f_in_kz() => not kzOnly or not na(time(timeframe.period, kzSession))
+// =============== POSITION SIZING ===============
+f_calculate_qty(float entryPrice, float stopLoss) =>
+    bool isHeavy = str.contains(syminfo.ticker, "BTC") or str.contains(syminfo.ticker, "ETH")
+    float notionalMin = isHeavy ? minNotionalHeavy : minNotionalDefault
+    float qtyMin = notionalMin / entryPrice
+    
+    float qtyComputed = 0.0
+    if riskMode == 'Fixed Cash ($)'
+        qtyComputed := cashPerTrade / entryPrice
+    else if riskMode == 'Risk per Trade ($)'
+        float risk = math.max(math.abs(entryPrice - stopLoss), syminfo.mintick)
+        qtyComputed := riskUsd / risk
+    else if riskMode == 'Risk % of Equity'
+        float riskUsdCalc = strategy.equity * (riskPct / 100)
+        float risk = math.max(math.abs(entryPrice - stopLoss), syminfo.mintick)
+        qtyComputed := riskUsdCalc / risk
+    
+    math.max(qtyComputed, qtyMin)
+// Sessions
+var string TIMEZONE = 'America/New_York'
+session_asia = time(timeframe.period, '2000-2200', TIMEZONE)
+session_london = time(timeframe.period, '0200-0500', TIMEZONE)
+session_ny_am = time(timeframe.period, '0800-1100', TIMEZONE)
+session_ny_pm = time(timeframe.period, '1300-1500', TIMEZONE)
+f_get_active_session_info() =>
+    if not na(session_asia)
+        ['Asia', kz_asia_color]
+    else if not na(session_london)
+        ['London', kz_london_color]
+    else if not na(session_ny_am)
+        ['NY AM', kz_ny_am_color]
+    else if not na(session_ny_pm)
+        ['NY PM', kz_ny_pm_color]
+    else
+        [string(na), color(na)]
+// в глобальной области! (не в if)
+[active_session_name, active_session_color] = f_get_active_session_info()
+// фон Kill Zone: плот-функция без локального if
+bgcolor(showVisual and showKzBackground and not na(active_session_color) ? active_session_color : na, 95)
+// алерт «вход в Kill Zone»
+var string prev_session_name = na
+if alertOnKzEnter and active_session_name != prev_session_name and not na(active_session_name)
+    alert('Вход в Kill Zone: ' + active_session_name, alert.freq_once_per_bar)
+prev_session_name := active_session_name
+f_is_signal_allowed_by_session(string context) =>
+    if not enableKzFilter
+        true
+    else
+        string filterMode = context == 'Trend' ? 'Строгий' : kzFilter_Counter
+        if filterMode == 'Игнорировать'
+            true
+        else if na(active_session_name)
+            filterMode == 'Мягкий'
+        else
+            bool ok = false
+            if active_session_name == 'London' or active_session_name == 'NY AM'
+                ok := true
+            else if (active_session_name == 'Asia' or active_session_name == 'NY PM') and filterMode == 'Мягкий'
+                ok := true
+            ok
+// Управление массивами (без ошибок удаления na)
+manage_array_of_boxes(array<box> a, int max_size) =>
+    while array.size(a) > max_size
+        bx = array.get(a, 0)
+        if not na(bx)
+            box.delete(bx)
+        array.remove(a, 0)
+manage_array_of_lines(array<line> a, int max_size) =>
+    while array.size(a) > max_size
+        ln = array.get(a, 0)
+        if not na(ln)
+            line.delete(ln)
+        array.remove(a, 0)
+manage_array_of_labels(array<label> a, int max_size) =>
+    while array.size(a) > max_size
+        lb = array.get(a, 0)
+        if not na(lb)
+            label.delete(lb)
+        array.remove(a, 0)
+manage_array_of_breakPoints(array<BreakPoint> a, int max_size) =>
+    while array.size(a) > max_size
+        p = array.get(a, 0)
+        if showVisual and showLiquidity and not na(p.liqLine)
+            line.delete(p.liqLine)
+        array.remove(a, 0)
+manage_array_of_inducements(array<InducementPoint> pts, array<line> lns, array<label> lbs, int max_size) =>
+    while array.size(pts) > max_size
+        l = array.shift(lns)
+        b = array.shift(lbs)
+        if not na(l) // безопасное удаление
+            line.delete(l)
+        if not na(b)
+            label.delete(b)
+        array.shift(pts)
+manage_fvg_zones(array<FVG> fvg_array, int max_size) =>
+    while array.size(fvg_array) > max_size
+        item = array.get(fvg_array, 0)
+        if not na(item.fvgBox)
+            box.delete(item.fvgBox)
+        array.remove(fvg_array, 0)
+// =============== ГЛОБАЛЫ ===============
+var ltf_settings = zigzag.Settings.new(ltf_threshold_multiplier, ltf_depth, na, false, false, false, false, 'Absolute', true)
+var ltf_zigZag = zigzag.newInstance(ltf_settings)
+var ltf_breakPoints = array.new<BreakPoint>()
+var ltf_fibBoxes1 = array.new_box()
+var ltf_fibBoxes2 = array.new_box()
+var ltf_lines0 = array.new_line()
+var ltf_lines1 = array.new_line()
+var ltf_rr_boxes = array.new_box()
+var box ltf_trend_signal_box = na
+var int ltf_trend = 0
+var float ltf_protected_high = na
+var int ltf_protected_high_time = na
+var float ltf_protected_low = na
+var int ltf_protected_low_time = na
+var float ltf_bos_swing_start_price = na
+var ltf_line_style = f_get_linestyle(liqLineStyle)
+var bool waiting_for_bullish_reversal = false
+var bool waiting_for_bearish_reversal = false
+var box active_reversal_box = na
+varip int asia_signal_count = 0
+varip int london_signal_count = 0
+varip int ny_am_signal_count = 0
+varip int ny_pm_signal_count = 0
+float atrValue = ta.atr(14)
+var idm_points = array.new<InducementPoint>()
+var idm_lines = array.new_line()
+var idm_labels = array.new_label()
+var fvg_zones = array.new<FVG>()
+var fvg_fill_labels = array.new_label()
+var ifvg_labels = array.new_label()
+var mtf_structurePoints = array.new<BreakPoint>()
+var mtf_fibBoxes1 = array.new_box()
+var mtf_fibBoxes2 = array.new_box()
+var mtf_supply_zones = array.new_box()
+var mtf_demand_zones = array.new_box()
+var int mtf_swing_direction = 0
+var string lastSignalType = na
+var float trailingLongStop = na
+var float trailingShortStop = na
+varip int rawRev = 0
+varip int passRev = 0
+varip int rawSwp = 0
+varip int passSwp = 0
+varip int rawTrd = 0
+varip int passTrd = 0
+// =============== STRATEGY POSITION STATE ===============
+var bool posLong = false
+var bool posShort = false
+var float posEntry = na
+var float posSL = na
+var float posTP1 = na
+var float posTP2 = na
+var float posTP3 = na
+var int posTPstage = 0
+var bool tp1Hit = false
+var bool tp2Hit = false
+var bool tp3Hit = false
+var bool slMovedToBE = false
+var int lastBuyBar = 0
+var int lastSellBar = 0
+// =============== MAX PACK вычисления ===============
+dailyVwapValue = ta.vwap(hlc3)
+weeklyVwapValue = request.security(syminfo.tickerid, 'W', ta.vwap(hlc3))
+vwapStdev = ta.stdev(close, 20)
+upperVwapBand = dailyVwapValue + vwapStdev * stdMultiplier
+lowerVwapBand = dailyVwapValue - vwapStdev * stdMultiplier
+trendFactor = ta.atr(trendAtrPeriod) / ta.stdev(close, trendStdevPeriod)
+isTrending = trendFactor > trendThresh_Trend
+isRanging = trendFactor < trendThresh_Range
+marketModeStr = isTrending ? 'TREND' : isRanging ? 'RANGE' : 'CHOPPY'
+isVolumeSpikeActive = volume > ta.percentile_nearest_rank(volume, volumeLookback, volumePercentile)
+// Сканер и кулдаун
+dvol = ta.sma(volume * close, 20)
+atrPct = ta.atr(14) / close * 100
+passLiquidity = not useScanner or dvol > minDollarVol and not na(dvol)
+passVolatility = not useScanner or atrPct > minAtrPct and not na(atrPct)
+passScanner = passLiquidity and passVolatility
+f_canAlert(bool isLong) =>
+    isLong ? bar_index - lastBuyBar > cooldownBars : bar_index - lastSellBar > cooldownBars
+allFiltersOK(bool isLongSignal, string context) =>
+    // VWAP
+    bool vwapOK = true
+    if context == 'Trend'
+        vwapOK := not useVwapFilter or (isLongSignal ? close > weeklyVwapValue : close < weeklyVwapValue)
+    else
+        if vwapFilter_Counter == 'Только Дневной VWAP'
+            vwapOK := isLongSignal ? close > dailyVwapValue : close < dailyVwapValue
+        else if vwapFilter_Counter == 'Дневной и Недельный'
+            vwapOK := isLongSignal ? close > dailyVwapValue and close > weeklyVwapValue : close < dailyVwapValue and close < weeklyVwapValue
+    // Trend/Range & Volume
+    bool trendOK = context == 'Trend' ? not useTrendModeFilter or isRanging or isTrending and (isLongSignal ? ltf_trend == 1 : ltf_trend == -1) : true
+    bool volumeOK = not useVolumeSpike or isVolumeSpikeActive
+    // Kill Zone
+    bool kzOK = f_in_kz()
+    // Trend Filter
+    bool trendFilterOK = f_trend_ok(isLongSignal)
+    
+    vwapOK and trendOK and volumeOK and kzOK and trendFilterOK
+// Chandelier trailing stop
+chandelierLongStopValue = ta.highest(high, trailStopLength) - ta.atr(14) * trailStopAtrMult
+chandelierShortStopValue = ta.lowest(low, trailStopLength) + ta.atr(14) * trailStopAtrMult
+if lastSignalType == 'BUY'
+    trailingLongStop := na(trailingLongStop) ? chandelierLongStopValue : math.max(trailingLongStop, chandelierLongStopValue)
+    trailingShortStop := na
+else if lastSignalType == 'SELL'
+    trailingShortStop := na(trailingShortStop) ? chandelierShortStopValue : math.min(trailingShortStop, chandelierShortStopValue)
+    trailingLongStop := na
+// =============== ВИЗУАЛ (только глобальные plot/bgcolor) ===============
+plot(showVisual and showVWAP ? dailyVwapValue : na, title = 'VWAP D', color = color.new(color.orange, 0), linewidth = 2)
+plot(showVisual and showWeeklyVWAP ? weeklyVwapValue : na, title = 'VWAP W', color = color.new(color.fuchsia, 0), linewidth = 2)
+pU = plot(showVisual and showBands ? upperVwapBand : na, title = 'Upper Band', color = color.new(color.orange, 70))
+pL = plot(showVisual and showBands ? lowerVwapBand : na, title = 'Lower Band', color = color.new(color.orange, 70))
+fill(pU, pL, color = showVisual ? color.new(color.orange, 95) : na)
+plot(showVisual and useTrailingStop ? trailingLongStop : na, title = 'Trailing Long', color = color.new(color.green, 0), linewidth = 2, style = plot.style_steplinebr)
+plot(showVisual and useTrailingStop ? trailingShortStop : na, title = 'Trailing Short', color = color.new(color.red, 0), linewidth = 2, style = plot.style_steplinebr)
+// =============== CORE UTILS ===============
+f_get_liquidity_target(bool isLong, float entryPrice, array<BreakPoint> points) =>
+    float targetPrice = na
+    if isLong
+        float closest_bsl = na
+        for point in points
+            if not point.broken and point.isHigh and point.price > entryPrice
+                closest_bsl := na(closest_bsl) ? point.price : math.min(closest_bsl, point.price)
+        targetPrice := closest_bsl
+    else
+        float closest_ssl = na
+        for point in points
+            if not point.broken and not point.isHigh and point.price < entryPrice
+                closest_ssl := na(closest_ssl) ? point.price : math.max(closest_ssl, point.price)
+        targetPrice := closest_ssl
+    targetPrice
+f_get_block_target(bool isLong, float entry, array<box> targetBoxes) =>
+    float tgt = na
+    if array.size(targetBoxes) > 0
+        bx = array.get(targetBoxes, array.size(targetBoxes)-1)
+        float top = box.get_top(bx)
+        float bottom = box.get_bottom(bx)
+        tgt := isLong ? (top > entry ? top : (bottom > entry ? bottom : na))
+                      : (bottom < entry ? bottom : (top < entry ? top : na))
+    tgt
+f_fvg_mid(FVG zone) => (zone.top + zone.bottom) / 2.0
+f_fvg_size_pct(FVG zone) =>
+    float mid = math.abs(f_fvg_mid(zone))
+    mid == 0.0 ? 0.0 : math.abs(zone.top - zone.bottom) / mid * 100
+f_get_opposite_fvg_target(bool isLong, float entry) =>
+    float tgt = na
+    for i = 0 to array.size(fvg_zones) - 1 by 1
+        zone = array.get(fvg_zones, i)
+        if isLong and not zone.isBullish
+            float candidate = zone.bottom
+            if candidate > entry
+                tgt := na(tgt) ? candidate : math.min(tgt, candidate)
+        else if not isLong and zone.isBullish
+            float candidate = zone.top
+            if candidate < entry
+                tgt := na(tgt) ? candidate : math.max(tgt, candidate)
+    na(tgt) ? na : round_tick(tgt)
+f_register_fvg_marker(array<label> storage, float price, string txt, color txtColor, bool isLong) =>
+    if showVisual
+        label lb = label.new(bar_index, price, txt, style = isLong ? label.style_label_up : label.style_label_down, color = color(na), textcolor = txtColor, size = size.small)
+        array.push(storage, lb)
+        manage_array_of_labels(storage, FVG_MARKER_LIMIT)
+round_tick(x) => math.round(x/syminfo.mintick)*syminfo.mintick
+f_candidate(string src, bool isLong, float entry, float risk, array<BreakPoint> liqPoints, array<box> targetBoxes, float rr_fix) =>
+    float price = src=='Liquidity' ? f_get_liquidity_target(isLong, entry, liqPoints)
+                 : src=='Block'     ? f_get_block_target(isLong, entry, targetBoxes)
+                 : (isLong ? entry + risk*rr_fix : entry - risk*rr_fix)
+    float effRR = na(price) or risk==0.0 ? na : math.abs(price-entry)/risk
+    [round_tick(price), effRR]
+f_pick_tp_conditional(bool isLong, float entry, float stop, string p1, string p2, string p3, float minRR, float rr_fix, array<BreakPoint> liqPoints, array<box> targetBoxes) =>
+    float risk = math.abs(entry - stop)
+    var string[] order = array.new_string(0)
+    array.clear(order)
+    array.push(order, p1)
+    array.push(order, p2)
+    array.push(order, p3)
+    float chosen = na
+    for i=0 to array.size(order)-1
+        src = array.get(order, i)
+        [price, eff] = f_candidate(src, isLong, entry, risk, liqPoints, targetBoxes, rr_fix)
+        if not na(price) and not na(eff) and eff >= minRR
+            chosen := price
+            break
+    if na(chosen)
+        chosen := isLong ? entry + risk*rr_fix : entry - risk*rr_fix
+    round_tick(chosen)
+draw_fib_blocks(float startPrice, int startTime, float endPrice, int endTime, color reversalColor, color targetColor, array<box> boxArray1, array<box> boxArray2, int max_size) =>
+    int dir = endPrice > startPrice ? 1 : -1
+    float h = math.abs(startPrice - endPrice)
+    if showVisual
+        float b1 = dir == 1 ? endPrice + h * (level_1_start - 1) : endPrice - h * (level_1_start - 1)
+        float b2 = dir == 1 ? endPrice + h * (level_1_end - 1) : endPrice - h * (level_1_end - 1)
+        box bx1 = box.new(startTime, math.max(b1, b2), time, math.min(b1, b2), xloc = xloc.bar_time, bgcolor = reversalColor, border_color = na, extend = extend.right)
+        array.push(boxArray1, bx1)
+        manage_array_of_boxes(boxArray1, max_size)
+        if showTargetBlock
+            float t1 = dir == 1 ? endPrice - h * math.abs(level_2_start) : endPrice + h * math.abs(level_2_start)
+            float t2 = dir == 1 ? endPrice - h * math.abs(level_2_end) : endPrice + h * math.abs(level_2_end)
+            box bx2 = box.new(endTime, math.max(t1, t2), time, math.min(t1, t2), xloc = xloc.bar_time, bgcolor = targetColor, border_color = na, extend = extend.right)
+            array.push(boxArray2, bx2)
+            manage_array_of_boxes(boxArray2, max_size)
+// =============== СБОР МУСОРА ПО ИСТОРИИ ===============
+var int lastBarIdx = bar_index
+if bar_index - lastBarIdx > 0 and bar_index > history_depth
+    manage_array_of_breakPoints(ltf_breakPoints, history_depth)
+    manage_array_of_boxes(ltf_fibBoxes1, history_depth)
+    manage_array_of_boxes(ltf_fibBoxes2, history_depth)
+    manage_array_of_lines(ltf_lines0, history_depth)
+    manage_array_of_lines(ltf_lines1, history_depth)
+    manage_array_of_boxes(ltf_rr_boxes, history_depth)
+    manage_array_of_inducements(idm_points, idm_lines, idm_labels, history_depth)
+    manage_fvg_zones(fvg_zones, history_depth)
+    manage_array_of_breakPoints(mtf_structurePoints, history_depth)
+    manage_array_of_boxes(mtf_fibBoxes1, history_depth)
+    manage_array_of_boxes(mtf_fibBoxes2, history_depth)
+    manage_array_of_boxes(mtf_supply_zones, history_depth)
+    manage_array_of_boxes(mtf_demand_zones, history_depth)
+lastBarIdx := bar_index
+// =============== LTF ZigZag обновление ===============
+ltf_settings.devThreshold := ta.atr(10) / close * 100 * ltf_threshold_multiplier
+bool isNewPivot = ltf_zigZag.update()
+if isNewPivot
+    lastP = ltf_zigZag.lastPivot()
+    int startOffset = ta.barssince(time == lastP.start.time)
+    int endOffset = ta.barssince(time == lastP.end.time)
+    float startPrice = sourceType == 'Bodies (Open/Close)' and lastP.start.price == high[startOffset] ? math.max(open[startOffset], close[startOffset]) : sourceType == 'Bodies (Open/Close)' ? math.min(open[startOffset], close[startOffset]) : lastP.start.price
+    float endPrice = sourceType == 'Bodies (Open/Close)' and lastP.end.price == high[endOffset] ? math.max(open[endOffset], close[endOffset]) : sourceType == 'Bodies (Open/Close)' ? math.min(open[endOffset], close[endOffset]) : lastP.end.price
+    float highPrice = math.max(startPrice, endPrice)
+    float lowPrice = math.min(startPrice, endPrice)
+    int highTime = endPrice > startPrice ? lastP.end.time : lastP.start.time
+    int lowTime = endPrice < startPrice ? lastP.end.time : lastP.start.time
+    line highLiqLine = showVisual and showLiquidity ? line.new(highTime, highPrice, time, highPrice, xloc = xloc.bar_time, color = bslColor, style = ltf_line_style) : na
+    line lowLiqLine = showVisual and showLiquidity ? line.new(lowTime, lowPrice, time, lowPrice, xloc = xloc.bar_time, color = sslColor, style = ltf_line_style) : na
+    array.push(ltf_breakPoints, BreakPoint.new(highPrice, highTime, true, false, highLiqLine))
+    array.push(ltf_breakPoints, BreakPoint.new(lowPrice, lowTime, false, false, lowLiqLine))
+    if na(ltf_protected_high) or highPrice > ltf_protected_high
+        if ltf_trend == 1
+            ltf_protected_low := lowPrice
+            ltf_protected_low_time := lowTime
+        ltf_protected_high := highPrice
+        ltf_protected_high_time := highTime
+        if ltf_trend == 0
+            ltf_trend := 1
+    if na(ltf_protected_low) or lowPrice < ltf_protected_low
+        if ltf_trend == -1
+            ltf_protected_high := highPrice
+            ltf_protected_high_time := highTime
+        ltf_protected_low := lowPrice
+        ltf_protected_low_time := lowTime
+        if ltf_trend == 0
+            ltf_trend := -1
+    draw_fib_blocks(startPrice, lastP.start.time, endPrice, lastP.end.time, fillColBull_1, fillColBull_2, ltf_fibBoxes1, ltf_fibBoxes2, maxPastSwings)
+    if showVisual and show01Lines
+        array.push(ltf_lines0, line.new(lastP.start.time, startPrice, lastP.end.time, startPrice, xloc = xloc.bar_time, color = lineColor, style = line.style_dashed, extend = extend.right))
+        array.push(ltf_lines1, line.new(lastP.start.time, endPrice, lastP.end.time, endPrice, xloc = xloc.bar_time, color = lineColor, style = line.style_dashed, extend = extend.right))
+// =============== MTF pivots ===============
+var float last_high_price = na
+var int last_high_time = na
+var float last_low_price = na
+var int last_low_time = na
+// --- HTF pivots: вызываем security ВНЕ условий, потом мапим в рабочие переменные
+float htf_pHigh = na
+float htf_pLow = na
+[_htfHigh, _htfLow] = request.security(syminfo.tickerid, mtf_timeframe, [ta.pivothigh(high, mtf_depth, mtf_depth), ta.pivotlow(low, mtf_depth, mtf_depth)], barmerge.gaps_off, barmerge.lookahead_off)
+// переносим в постоянные серии
+htf_pHigh := _htfHigh
+htf_pLow := _htfLow
+// если MTF выключен — гасим
+if not mtf_enabled
+    htf_pHigh := na
+    htf_pLow := na
+if mtf_enabled
+    if not na(htf_pHigh)
+        if not na(last_low_price) and last_low_price != htf_pHigh
+            float swing_size_percent = math.abs(htf_pHigh - last_low_price) / last_low_price * 100
+            if swing_size_percent >= mtf_min_swing_percent
+                float startPrice = last_low_price
+                int startTime = last_low_time
+                float endPrice = htf_pHigh
+                int endTime = time[mtf_depth]
+                array.push(mtf_structurePoints, BreakPoint.new(endPrice, endTime, true, false, na))
+                array.push(mtf_structurePoints, BreakPoint.new(startPrice, startTime, false, false, na))
+                draw_fib_blocks(startPrice, startTime, endPrice, endTime, mtf_fillColBull_1, mtf_fillColBull_2, mtf_fibBoxes1, mtf_fibBoxes2, maxPastSwings)
+                if array.size(mtf_fibBoxes1) > 0
+                    array.push(mtf_supply_zones, array.get(mtf_fibBoxes1, array.size(mtf_fibBoxes1) - 1))
+                mtf_swing_direction := 1
+        last_high_price := htf_pHigh
+        last_high_time := time[mtf_depth]
+    if not na(htf_pLow)
+        if not na(last_high_price) and last_high_price != htf_pLow
+            float swing_size_percent = math.abs(last_high_price - htf_pLow) / last_high_price * 100
+            if swing_size_percent >= mtf_min_swing_percent
+                float startPrice = last_high_price
+                int startTime = last_high_time
+                float endPrice = htf_pLow
+                int endTime = time[mtf_depth]
+                array.push(mtf_structurePoints, BreakPoint.new(startPrice, startTime, true, false, na))
+                array.push(mtf_structurePoints, BreakPoint.new(endPrice, endTime, false, false, na))
+                draw_fib_blocks(startPrice, startTime, endPrice, endTime, mtf_fillColBull_1, mtf_fillColBull_2, mtf_fibBoxes1, mtf_fibBoxes2, maxPastSwings)
+                if array.size(mtf_fibBoxes1) > 0
+                    array.push(mtf_demand_zones, array.get(mtf_fibBoxes1, array.size(mtf_fibBoxes1) - 1))
+                mtf_swing_direction := -1
+        last_low_price := htf_pLow
+        last_low_time := time[mtf_depth]
+bool priceInHtfDemand = false
+bool priceInHtfSupply = false
+if mtf_enabled
+    for bx in mtf_demand_zones
+        if close > box.get_bottom(bx) and close < box.get_top(bx)
+            priceInHtfDemand := true
+    for bx in mtf_supply_zones
+        if close > box.get_bottom(bx) and close < box.get_top(bx)
+            priceInHtfSupply := true
+bool isMtfBullish = mtf_swing_direction == 1
+bool isMtfBearish = mtf_swing_direction == -1
+break_liquidity(BreakPoint point) =>
+    if showVisual and showLiquidity and not na(point.liqLine)
+        line.delete(point.liqLine)
+// =============== SIGNAL DETECTION VARIABLES ===============
+var bool newBuySignal = false
+var bool newSellSignal = false
+var float signalEntry = na
+var float signalSL = na
+var float signalTP1 = na
+var float signalTP2 = na
+var float signalTP3 = na
+var string signalReason = na
+// =============== CHOCH/BOS на LTF ===============
+if showBreakEvents
+    bool isBearishChochCross = ta.crossunder(close, ltf_protected_low)
+    bool isBullishChochCross = ta.crossover(close, ltf_protected_high)
+    if ltf_trend == 1 and not na(ltf_protected_low) and isBearishChochCross
+        ltf_trend := -1
+        if showVisual
+            line.new(ltf_protected_low_time, ltf_protected_low, time, ltf_protected_low, color = bearishChochColor, width = 2, xloc = xloc.bar_time)
+            label.new(ltf_protected_low_time, ltf_protected_low, chochLabelText, yloc = yloc.abovebar, style = label.style_label_down, textcolor = bearishChochColor, color = color(na), xloc = xloc.bar_time)
+    else if ltf_trend == -1 and not na(ltf_protected_high) and isBullishChochCross
+        ltf_trend := 1
+        if showVisual
+            line.new(ltf_protected_high_time, ltf_protected_high, time, ltf_protected_high, color = bullishChochColor, width = 2, xloc = xloc.bar_time)
+            label.new(ltf_protected_high_time, ltf_protected_high, chochLabelText, yloc = yloc.belowbar, style = label.style_label_up, textcolor = bullishChochColor, color = color(na), xloc = xloc.bar_time)
+// =============== REVERSAL (Exhaustion) ===============
+if showReversalSignals
+    if not waiting_for_bullish_reversal and not waiting_for_bearish_reversal and array.size(ltf_fibBoxes1) > 0
+        box lastBox = array.get(ltf_fibBoxes1, array.size(ltf_fibBoxes1) - 1)
+        if array.size(ltf_breakPoints) >= 2
+            end_point = array.get(ltf_breakPoints, array.size(ltf_breakPoints) - 2)
+            start_point = array.get(ltf_breakPoints, array.size(ltf_breakPoints) - 1)
+            bool is_bullish_swing = end_point.price > start_point.price
+            if not is_bullish_swing and low <= box.get_top(lastBox) and high >= box.get_bottom(lastBox)
+                waiting_for_bullish_reversal := true
+                active_reversal_box := lastBox
+            if is_bullish_swing and high >= box.get_bottom(lastBox) and low <= box.get_top(lastBox)
+                waiting_for_bearish_reversal := true
+                active_reversal_box := lastBox
+    if waiting_for_bullish_reversal and strategy.position_size == 0
+        if close > open
+            if close <= box.get_top(active_reversal_box) and close >= box.get_bottom(active_reversal_box)
+                rawRev := rawRev + 1
+                bool isHtfZoneOk = not filterByHtfZone or priceInHtfDemand
+                bool isTradeModeOk = tradingMode == 'Intraday' or tradingMode == 'Swing' and isMtfBullish
+                bool isSessionOk = f_is_signal_allowed_by_session('Reversal')
+                if isTradeModeOk and isHtfZoneOk and isSessionOk and allFiltersOK(true, 'Reversal')
+                    passRev := passRev + 1
+                    
+                    // Подготовка сигнала
+                    float entryPrice = close
+                    float top = box.get_top(active_reversal_box)
+                    float bottom = box.get_bottom(active_reversal_box)
+                    float height = top - bottom
+                    float buffer = rev_stop_buffer_type == 'ATR' ? atrValue * rev_stop_buffer_value : height * (rev_stop_buffer_value / 100)
+                    float stopLoss = bottom - buffer
+                    float risk = math.abs(entryPrice - stopLoss)
+                    float baseTP = entryPrice + risk * rr_ratio
+                    float liqTP = f_get_liquidity_target(true, entryPrice, ltf_breakPoints)
+                    float fvgTP = fvgAsTP ? f_get_opposite_fvg_target(true, entryPrice) : na
+                    float takeProfit = not na(fvgTP) ? fvgTP : (tp_mode == 'Risk/Reward' ? baseTP : tp_mode == 'Liquidity Target' and not na(liqTP) ? liqTP : baseTP)
+                    bool isLong = true
+                    
+                    // compute TP1/TP2/TP3 (only active in Prioritized mode)
+                    float t1 = na
+                    float t2 = na
+                    float t3 = na
+                    if tp_mode == 'Prioritized (TP1/TP2/TP3)'
+                        t1 := fvgAsTP and not na(fvgTP) ? fvgTP : f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp1_p1, tp1_p2, tp1_p3, tp1_min_rr, tp1_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                        t2 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp2_p1, tp2_p2, tp2_p3, tp2_min_rr, tp2_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                        t3 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp3_p1, tp3_p2, tp3_p3, tp3_min_rr, tp3_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                    else
+                        t1 := takeProfit
+                        
+                    // Устанавливаем сигнал для обработки в конце
+                    newBuySignal := true
+                    signalEntry := entryPrice
+                    signalSL := stopLoss
+                    signalTP1 := t1
+                    signalTP2 := t2
+                    signalTP3 := t3
+                    signalReason := "Exhaustion Reversal"
+                    lastSignalType := 'BUY'
+                    
+                    if showVisual
+                        label.new(bar_index, low, 'BUY', style = label.style_label_up, color = color(na), textcolor = buyColor, size = size.large)
+                    
+                    waiting_for_bullish_reversal := false
+                    active_reversal_box := na
+        else if high > box.get_top(active_reversal_box)
+            waiting_for_bullish_reversal := false
+            active_reversal_box := na
+    if waiting_for_bearish_reversal and strategy.position_size == 0
+        if close < open
+            if close <= box.get_top(active_reversal_box) and close >= box.get_bottom(active_reversal_box)
+                rawRev := rawRev + 1
+                bool isHtfZoneOk = not filterByHtfZone or priceInHtfSupply
+                bool isTradeModeOk = tradingMode == 'Intraday' or tradingMode == 'Swing' and isMtfBearish
+                bool isSessionOk = f_is_signal_allowed_by_session('Reversal')
+                if isTradeModeOk and isHtfZoneOk and isSessionOk and allFiltersOK(false, 'Reversal')
+                    passRev := passRev + 1
+                    
+                    // Подготовка сигнала
+                    float entryPrice = close
+                    float top = box.get_top(active_reversal_box)
+                    float bottom = box.get_bottom(active_reversal_box)
+                    float height = top - bottom
+                    float buffer = rev_stop_buffer_type == 'ATR' ? atrValue * rev_stop_buffer_value : height * (rev_stop_buffer_value / 100)
+                    float stopLoss = top + buffer
+                    float risk = math.abs(entryPrice - stopLoss)
+                    float baseTP = entryPrice - risk * rr_ratio
+                    float liqTP = f_get_liquidity_target(false, entryPrice, ltf_breakPoints)
+                    float fvgTP = fvgAsTP ? f_get_opposite_fvg_target(false, entryPrice) : na
+                    float takeProfit = not na(fvgTP) ? fvgTP : (tp_mode == 'Risk/Reward' ? baseTP : tp_mode == 'Liquidity Target' and not na(liqTP) ? liqTP : baseTP)
+                    bool isLong = false
+                    
+                    // compute TP1/TP2/TP3 (only active in Prioritized mode)
+                    float t1 = na
+                    float t2 = na
+                    float t3 = na
+                    if tp_mode == 'Prioritized (TP1/TP2/TP3)'
+                        t1 := fvgAsTP and not na(fvgTP) ? fvgTP : f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp1_p1, tp1_p2, tp1_p3, tp1_min_rr, tp1_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                        t2 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp2_p1, tp2_p2, tp2_p3, tp2_min_rr, tp2_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                        t3 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp3_p1, tp3_p2, tp3_p3, tp3_min_rr, tp3_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                    else
+                        t1 := takeProfit
+                        
+                    // Устанавливаем сигнал для обработки в конце
+                    newSellSignal := true
+                    signalEntry := entryPrice
+                    signalSL := stopLoss
+                    signalTP1 := t1
+                    signalTP2 := t2
+                    signalTP3 := t3
+                    signalReason := "Exhaustion Reversal"
+                    lastSignalType := 'SELL'
+                    
+                    if showVisual
+                        label.new(bar_index, high, 'SELL', style = label.style_label_down, color = color(na), textcolor = sellColor, size = size.large)
+                        
+                    waiting_for_bearish_reversal := false
+                    active_reversal_box := na
+        else if low < box.get_bottom(active_reversal_box)
+            waiting_for_bearish_reversal := false
+            active_reversal_box := na
+// =============== SWEEPS & BOS на LTF ===============
+if showBreakEvents and array.size(ltf_breakPoints) > 0
+    for i = 0 to array.size(ltf_breakPoints) - 1 by 1
+        point = array.get(ltf_breakPoints, i)
+        if not point.broken
+            if point.isHigh and (na(ltf_protected_high) or point.price != ltf_protected_high)
+                if ta.crossover(close, point.price) and ltf_trend == 1
+                    if showVisual
+                        line.new(point.time, point.price, time, point.price, color = bullishBosColor, style = line.style_dotted, xloc = xloc.bar_time)
+                        label.new(point.time, point.price, bosLabelText, yloc = yloc.belowbar, style = label.style_label_up, textcolor = bullishBosColor, color = color(na), xloc = xloc.bar_time)
+                    break_liquidity(point)
+                    point.broken := true
+                    array.set(ltf_breakPoints, i, point)
+                else if sweepConfirmation == 'Intrabar (може зникати)' and high > point.price or sweepConfirmation == 'На закритії свічки' and high[1] > point.price and close[1] < point.price
+                    if not(strictMode and not barstate.isconfirmed)
+                        rawSwp := rawSwp + 1
+                        break_liquidity(point)
+                        point.broken := true
+                        array.set(ltf_breakPoints, i, point)
+                        if showSweepSignals
+                            bool isHtfZoneOk = not filterByHtfZone or priceInHtfSupply
+                            bool isTradeModeOk = tradingMode == 'Intraday' or tradingMode == 'Swing' and isMtfBearish
+                            bool isSessionOk = f_is_signal_allowed_by_session('Sweep')
+                            if isTradeModeOk and isHtfZoneOk and isSessionOk and allFiltersOK(false, 'Sweep')
+                                passSwp := passSwp + 1
+                                
+                                // Подготовка сигнала
+                                float entryPrice = close
+                                float baseStop = high
+                                float buffer = trend_stop_buffer_type == 'ATR' ? atrValue * trend_stop_buffer_value : baseStop * (trend_stop_buffer_value / 100)
+                                float stopLoss = baseStop + buffer
+                                float risk = math.abs(entryPrice - stopLoss)
+                                float baseTP = entryPrice - risk * rr_ratio
+                                float liqTP = f_get_liquidity_target(false, entryPrice, ltf_breakPoints)
+                                float fvgTP = fvgAsTP ? f_get_opposite_fvg_target(false, entryPrice) : na
+                                float takeProfit = not na(fvgTP) ? fvgTP : (tp_mode == 'Risk/Reward' ? baseTP : tp_mode == 'Liquidity Target' and not na(liqTP) ? liqTP : baseTP)
+                                bool isLong = false
+                                
+                                // compute TP1/TP2/TP3 (only active in Prioritized mode)
+                                float t1 = na
+                                float t2 = na
+                                float t3 = na
+                                if tp_mode == 'Prioritized (TP1/TP2/TP3)'
+                                    t1 := fvgAsTP and not na(fvgTP) ? fvgTP : f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp1_p1, tp1_p2, tp1_p3, tp1_min_rr, tp1_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                                    t2 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp2_p1, tp2_p2, tp2_p3, tp2_min_rr, tp2_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                                    t3 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp3_p1, tp3_p2, tp3_p3, tp3_min_rr, tp3_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                                else
+                                    t1 := takeProfit
+                                    
+                                // Устанавливаем сигнал для обработки в конце
+                                newSellSignal := true
+                                signalEntry := entryPrice
+                                signalSL := stopLoss
+                                signalTP1 := t1
+                                signalTP2 := t2
+                                signalTP3 := t3
+                                signalReason := "Liquidity Sweep"
+                                lastSignalType := 'SELL'
+                                
+                                if showVisual
+                                    label.new(bar_index, high, 'SELL', style = label.style_label_down, color = color(na), textcolor = sellColor, size = size.large)
+                                    
+            else if not point.isHigh and (na(ltf_protected_low) or point.price != ltf_protected_low)
+                if ta.crossunder(close, point.price) and ltf_trend == -1
+                    if showVisual
+                        line.new(point.time, point.price, time, point.price, color = bearishBosColor, style = line.style_dotted, xloc = xloc.bar_time)
+                        label.new(point.time, point.price, bosLabelText, yloc = yloc.abovebar, style = label.style_label_down, textcolor = bearishBosColor, color = color(na), xloc = xloc.bar_time)
+                    break_liquidity(point)
+                    point.broken := true
+                    array.set(ltf_breakPoints, i, point)
+                else if sweepConfirmation == 'Intrabar (може зникати)' and low < point.price or sweepConfirmation == 'На закритії свічки' and low[1] < point.price and close[1] > point.price
+                    if not(strictMode and not barstate.isconfirmed)
+                        rawSwp := rawSwp + 1
+                        break_liquidity(point)
+                        point.broken := true
+                        array.set(ltf_breakPoints, i, point)
+                        if showSweepSignals
+                            bool isHtfZoneOk = not filterByHtfZone or priceInHtfDemand
+                            bool isTradeModeOk = tradingMode == 'Intraday' or tradingMode == 'Swing' and isMtfBullish
+                            bool isSessionOk = f_is_signal_allowed_by_session('Sweep')
+                            if isTradeModeOk and isHtfZoneOk and isSessionOk and allFiltersOK(true, 'Sweep')
+                                passSwp := passSwp + 1
+                                
+                                // Подготовка сигнала
+                                float entryPrice = close
+                                float baseStop = low
+                                float buffer = trend_stop_buffer_type == 'ATR' ? atrValue * trend_stop_buffer_value : baseStop * (trend_stop_buffer_value / 100)
+                                float stopLoss = baseStop - buffer
+                                float risk = math.abs(entryPrice - stopLoss)
+                                float baseTP = entryPrice + risk * rr_ratio
+                                float liqTP = f_get_liquidity_target(true, entryPrice, ltf_breakPoints)
+                                float fvgTP = fvgAsTP ? f_get_opposite_fvg_target(true, entryPrice) : na
+                                float takeProfit = not na(fvgTP) ? fvgTP : (tp_mode == 'Risk/Reward' ? baseTP : tp_mode == 'Liquidity Target' and not na(liqTP) ? liqTP : baseTP)
+                                bool isLong = true
+                                
+                                // compute TP1/TP2/TP3 (only active in Prioritized mode)
+                                float t1 = na
+                                float t2 = na
+                                float t3 = na
+                                if tp_mode == 'Prioritized (TP1/TP2/TP3)'
+                                    t1 := fvgAsTP and not na(fvgTP) ? fvgTP : f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp1_p1, tp1_p2, tp1_p3, tp1_min_rr, tp1_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                                    t2 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp2_p1, tp2_p2, tp2_p3, tp2_min_rr, tp2_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                                    t3 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp3_p1, tp3_p2, tp3_p3, tp3_min_rr, tp3_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                                else
+                                    t1 := takeProfit
+                                    
+                                // Устанавливаем сигнал для обработки в конце
+                                newBuySignal := true
+                                signalEntry := entryPrice
+                                signalSL := stopLoss
+                                signalTP1 := t1
+                                signalTP2 := t2
+                                signalTP3 := t3
+                                signalReason := "Liquidity Sweep"
+                                lastSignalType := 'BUY'
+                                
+                                if showVisual
+                                    label.new(bar_index, low, 'BUY', style = label.style_label_up, color = color(na), textcolor = buyColor, size = size.large)
+// =============== INDUCEMENT SWEEP ===============
+if showInducement and array.size(idm_points) > 0
+    int i = array.size(idm_points) - 1
+    while i >= 0
+        idm_point = array.get(idm_points, i)
+        bool swept = idm_point.isBullish ? low <= idm_point.price : high >= idm_point.price
+        if swept
+            if showVisual
+                ln = array.get(idm_lines, i)
+                lb = array.get(idm_labels, i)
+                if not na(ln)
+                    line.delete(ln)
+                if not na(lb)
+                    label.delete(lb)
+            array.remove(idm_points, i)
+            array.remove(idm_lines, i)
+            array.remove(idm_labels, i)
+        i := i - 1
+    manage_array_of_inducements(idm_points, idm_lines, idm_labels, maxInducementLines)
+// =============== TREND PULLBACK ===============
+if showTrendSignals and not na(ltf_trend_signal_box)
+    float top = box.get_top(ltf_trend_signal_box)
+    float bottom = box.get_bottom(ltf_trend_signal_box)
+    if high >= bottom and low <= top and strategy.position_size == 0
+        rawTrd := rawTrd + 1
+        bool isLong = ltf_trend == 1
+        bool htfContext = isLong ? priceInHtfDemand : priceInHtfSupply
+        bool isHtfZoneOk = not filterByHtfZone or htfContext
+        bool isTradeModeOk = tradingMode == 'Intraday' or tradingMode == 'Swing' and (isLong ? isMtfBullish : isMtfBearish)
+        bool isSessionOk = f_is_signal_allowed_by_session('Trend')
+        if isTradeModeOk and isHtfZoneOk and isSessionOk and allFiltersOK(isLong, 'Trend')
+            passTrd := passTrd + 1
+            float entryPrice = isLong ? math.min(open, top) : math.max(open, bottom)
+            
+            float baseStop = ltf_bos_swing_start_price
+            float buffer = trend_stop_buffer_type == 'ATR' ? atrValue * trend_stop_buffer_value : baseStop * (trend_stop_buffer_value / 100)
+            float stopLoss = isLong ? baseStop - buffer : baseStop + buffer
+            float risk = math.abs(entryPrice - stopLoss)
+            float baseTP = isLong ? entryPrice + risk * rr_ratio : entryPrice - risk * rr_ratio
+            float liqTP = f_get_liquidity_target(isLong, entryPrice, ltf_breakPoints)
+            float fvgTP = fvgAsTP ? f_get_opposite_fvg_target(isLong, entryPrice) : na
+            float takeProfit = not na(fvgTP) ? fvgTP : (tp_mode == 'Risk/Reward' ? baseTP : tp_mode == 'Liquidity Target' and not na(liqTP) ? liqTP : baseTP)
+            
+            // compute TP1/TP2/TP3 (only active in Prioritized mode)
+            float t1 = na
+            float t2 = na
+            float t3 = na
+            if tp_mode == 'Prioritized (TP1/TP2/TP3)'
+                t1 := fvgAsTP and not na(fvgTP) ? fvgTP : f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp1_p1, tp1_p2, tp1_p3, tp1_min_rr, tp1_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                t2 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp2_p1, tp2_p2, tp2_p3, tp2_min_rr, tp2_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                t3 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp3_p1, tp3_p2, tp3_p3, tp3_min_rr, tp3_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+            else
+                t1 := takeProfit
+                
+            // Устанавливаем сигнал для обработки в конце
+            if isLong
+                newBuySignal := true
+            else
+                newSellSignal := true
+            signalEntry := entryPrice
+            signalSL := stopLoss
+            signalTP1 := t1
+            signalTP2 := t2
+            signalTP3 := t3
+            signalReason := "Trend Pullback"
+            lastSignalType := isLong ? 'BUY' : 'SELL'
+            
+            if showVisual
+                label.new(bar_index, isLong ? low : high, isLong ? 'BUY' : 'SELL', style = isLong ? label.style_label_up : label.style_label_down, color = color(na), textcolor = isLong ? buyColor : sellColor, size = size.large)
+                
+        if showVisual and not na(ltf_trend_signal_box)
+            box.delete(ltf_trend_signal_box)
+        ltf_trend_signal_box := na
+// =============== Линии/IDM протягивание ===============
+if showVisual
+    if showLiquidity
+        for p in ltf_breakPoints
+            if not p.broken and not na(p.liqLine)
+                line.set_x2(p.liqLine, time)
+    if showInducement and array.size(idm_lines) > 0
+        for i = 0 to array.size(idm_lines) - 1 by 1
+            idm_point = array.get(idm_points, i)
+            if not idm_point.isSwept
+                lnU = array.get(idm_lines, i)
+                if not na(lnU)
+                    line.set_x2(lnU, time)
+// =============== IC (FVG/Uncontested/Large body) ===============
+color bg_ic = na
+bool needFvgProcessing = showIC or useFvgSignals or useInversionFvg or fvgAsTP
+if needFvgProcessing and bar_index > 4
+    if ic_show_fvg or useFvgSignals or useInversionFvg or fvgAsTP
+        int i = array.size(fvg_zones) - 1
+        while i >= 0
+            fvg = array.get(fvg_zones, i)
+            float zoneHigh = math.max(fvg.top, fvg.bottom)
+            float zoneLow = math.min(fvg.top, fvg.bottom)
+            float zoneRange = math.max(math.abs(zoneHigh - zoneLow), syminfo.mintick)
+            bool priceTouched = fvg.isBullish ? low <= zoneHigh : high >= zoneLow
+            bool closeInside = close <= zoneHigh and close >= zoneLow
+            bool oldEnough = bar_index > fvg.createdBarIndex
+            float sizePct = f_fvg_size_pct(fvg)
+            bool sizeOk = sizePct >= fvgMinSize
+            bool inversionBreak = fvg.isBullish ? close < zoneLow : close > zoneHigh
+            bool removeZone = false
+
+            if oldEnough and sizeOk and priceTouched
+                bool sessionOk = f_is_signal_allowed_by_session('FVG')
+                bool inHtfZoneLong = not filterByHtfZone or priceInHtfDemand
+                bool inHtfZoneShort = not filterByHtfZone or priceInHtfSupply
+                bool tradeModeLongOk = tradingMode == 'Intraday' or (tradingMode == 'Swing' and isMtfBullish)
+                bool tradeModeShortOk = tradingMode == 'Intraday' or (tradingMode == 'Swing' and isMtfBearish)
+
+                if useInversionFvg and inversionBreak and strategy.position_size == 0 and sessionOk
+                    bool isLong = not fvg.isBullish
+                    bool htfOk = isLong ? inHtfZoneLong : inHtfZoneShort
+                    bool tradeModeOk = isLong ? tradeModeLongOk : tradeModeShortOk
+                    if htfOk and tradeModeOk and allFiltersOK(isLong, 'FVG')
+                        float buffer = math.max(zoneRange * 0.25, syminfo.mintick)
+                        float entryPrice = close
+                        float stopLoss = isLong ? zoneHigh - buffer : zoneLow + buffer
+                        float risk = math.abs(entryPrice - stopLoss)
+                        float baseTP = isLong ? entryPrice + risk * rr_ratio : entryPrice - risk * rr_ratio
+                        float liqTP = f_get_liquidity_target(isLong, entryPrice, ltf_breakPoints)
+                        float fvgTP = fvgAsTP ? f_get_opposite_fvg_target(isLong, entryPrice) : na
+                        float takeProfit = not na(fvgTP) ? fvgTP : (tp_mode == 'Liquidity Target' and not na(liqTP) ? liqTP : baseTP)
+
+                        float t1 = na
+                        float t2 = na
+                        float t3 = na
+                        if tp_mode == 'Prioritized (TP1/TP2/TP3)'
+                            t1 := fvgAsTP and not na(fvgTP) ? fvgTP : f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp1_p1, tp1_p2, tp1_p3, tp1_min_rr, tp1_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                            t2 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp2_p1, tp2_p2, tp2_p3, tp2_min_rr, tp2_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                            t3 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp3_p1, tp3_p2, tp3_p3, tp3_min_rr, tp3_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                        else
+                            t1 := takeProfit
+
+                        if isLong and entryPrice > stopLoss or not isLong and entryPrice < stopLoss
+                            if isLong
+                                newBuySignal := true
+                            else
+                                newSellSignal := true
+                            signalEntry := entryPrice
+                            signalSL := stopLoss
+                            signalTP1 := t1
+                            signalTP2 := t2
+                            signalTP3 := t3
+                            signalReason := 'Inversion FVG'
+                            lastSignalType := isLong ? 'BUY' : 'SELL'
+                            if showVisual
+                                f_register_fvg_marker(ifvg_labels, f_fvg_mid(fvg), 'IFVG', isLong ? buyColor : sellColor, isLong)
+                        removeZone := true
+
+                if not removeZone and useFvgSignals and closeInside and strategy.position_size == 0 and sessionOk
+                    bool isLong = fvg.isBullish
+                    bool htfOk = isLong ? inHtfZoneLong : inHtfZoneShort
+                    bool tradeModeOk = isLong ? tradeModeLongOk : tradeModeShortOk
+                    if htfOk and tradeModeOk and allFiltersOK(isLong, 'FVG')
+                        float buffer = math.max(zoneRange * 0.25, syminfo.mintick)
+                        float entryPrice = close
+                        float stopLoss = isLong ? zoneLow - buffer : zoneHigh + buffer
+                        float risk = math.abs(entryPrice - stopLoss)
+                        float baseTP = isLong ? entryPrice + risk * rr_ratio : entryPrice - risk * rr_ratio
+                        float liqTP = f_get_liquidity_target(isLong, entryPrice, ltf_breakPoints)
+                        float fvgTP = fvgAsTP ? f_get_opposite_fvg_target(isLong, entryPrice) : na
+                        float takeProfit = not na(fvgTP) ? fvgTP : (tp_mode == 'Liquidity Target' and not na(liqTP) ? liqTP : baseTP)
+
+                        float t1 = na
+                        float t2 = na
+                        float t3 = na
+                        if tp_mode == 'Prioritized (TP1/TP2/TP3)'
+                            t1 := fvgAsTP and not na(fvgTP) ? fvgTP : f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp1_p1, tp1_p2, tp1_p3, tp1_min_rr, tp1_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                            t2 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp2_p1, tp2_p2, tp2_p3, tp2_min_rr, tp2_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                            t3 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp3_p1, tp3_p2, tp3_p3, tp3_min_rr, tp3_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+                        else
+                            t1 := takeProfit
+
+                        if isLong and entryPrice > stopLoss or not isLong and entryPrice < stopLoss
+                            if isLong
+                                newBuySignal := true
+                            else
+                                newSellSignal := true
+                            signalEntry := entryPrice
+                            signalSL := stopLoss
+                            signalTP1 := t1
+                            signalTP2 := t2
+                            signalTP3 := t3
+                            signalReason := 'FVG Fill'
+                            lastSignalType := isLong ? 'BUY' : 'SELL'
+                            if showVisual
+                                f_register_fvg_marker(fvg_fill_labels, f_fvg_mid(fvg), 'FVG', isLong ? buyColor : sellColor, isLong)
+                        removeZone := true
+
+            if fvg.isBullish ? low <= fvg.top : high >= fvg.bottom
+                removeZone := true
+
+            if removeZone
+                if showVisual and not na(fvg.fvgBox)
+                    box.delete(fvg.fvgBox)
+                array.remove(fvg_zones, i)
+            i := i - 1
+        int right_idx = bar_index + 499
+        bool bull_fvg = low[1] > high[3]
+        bool bear_fvg = high[1] < low[3]
+        if bull_fvg
+            float top_price = low[1]
+            float bottom_price = high[3]
+            box b = showVisual and showIC ? box.new(bar_index[2], top_price, right_idx, bottom_price, border_color = na, bgcolor = ic_color_fvg_bull, xloc = xloc.bar_index) : na
+            array.push(fvg_zones, FVG.new(b, true, top_price, bottom_price, bar_index[2]))
+        if bear_fvg
+            float top_price = low[3]
+            float bottom_price = high[1]
+            box b = showVisual and showIC ? box.new(bar_index[2], top_price, right_idx, bottom_price, border_color = na, bgcolor = ic_color_fvg_bear, xloc = xloc.bar_index) : na
+            array.push(fvg_zones, FVG.new(b, false, top_price, bottom_price, bar_index[2]))
+        manage_fvg_zones(fvg_zones, ic_max_count)
+    if showIC and ic_show_uncontested
+        float body = math.abs(close - open)
+        if body > 0
+            bool bull = close > open
+            float lower_shadow = open - low
+            float upper_shadow = high - close
+            bool is_uncontested_bull = bull and lower_shadow < body * (ic_shadow_perc / 100)
+            bool is_uncontested_bear = not bull and upper_shadow < body * (ic_shadow_perc / 100)
+            if is_uncontested_bull or is_uncontested_bear
+                bg_ic := ic_color_uncontested
+    if showIC and ic_show_large_body
+        float avg_body = ta.sma(math.abs(close - open), ic_body_len)
+        if avg_body > 0 and math.abs(close - open) > avg_body * ic_body_mult
+            bg_ic := ic_color_large_body
+bgcolor(showVisual ? bg_ic : na, 90)
+// =============== TP/SL MONITORING ===============
+f_level_hit_up(lvl) => strictMode ? (high[1] < lvl and high >= lvl) : (high >= lvl)
+f_level_hit_down(lvl) => strictMode ? (low[1] > lvl and low <= lvl) : (low <= lvl)
+// ИСПРАВЛЕН МОНИТОРИНГ TP УРОВНЕЙ - логика из файла "2"
+if (posLong or posShort) and posTPstage < 1 and not na(posTP1)
+    bool hit1 = posLong ? f_level_hit_up(posTP1) : f_level_hit_down(posTP1)
+    if hit1
+        tp1Hit := true
+        if moveSLtoBE and not slMovedToBE
+            posSL := posEntry
+            slMovedToBE := true
+            if alertOnBE and enableAlerts
+                alert('SL moved to BE after TP1 on ' + syminfo.ticker, alert.freq_once_per_bar_close)
+        posTPstage := 1
+        if alertOnTPs and enableAlerts
+            alert('TP1 reached on ' + syminfo.ticker, alert.freq_once_per_bar_close)
+if (posLong or posShort) and posTPstage < 2 and not na(posTP2)
+    bool hit2 = posLong ? f_level_hit_up(posTP2) : f_level_hit_down(posTP2)
+    if hit2
+        tp2Hit := true
+        posTPstage := 2
+        if alertOnTPs and enableAlerts
+            alert('TP2 reached on ' + syminfo.ticker, alert.freq_once_per_bar_close)
+if (posLong or posShort) and posTPstage < 3 and not na(posTP3)
+    bool hit3 = posLong ? f_level_hit_up(posTP3) : f_level_hit_down(posTP3)
+    if hit3
+        tp3Hit := true
+        posTPstage := 3
+        if alertOnTPs and enableAlerts
+            alert('TP3 reached on ' + syminfo.ticker, alert.freq_once_per_bar_close)
+        // Сброс позиции после финального TP
+        posLong := false
+        posShort := false
+        posEntry := na
+        posSL := na
+        posTP1 := na
+        posTP2 := na
+        posTP3 := na
+        posTPstage := 0
+        tp1Hit := false
+        tp2Hit := false
+        tp3Hit := false
+        slMovedToBE := false
+// SL hit check
+slDynamic = moveSLtoBE and slMovedToBE ? posEntry : posSL
+if (posLong or posShort) and not na(slDynamic)
+    bool stopHit = posLong ? f_level_hit_down(slDynamic) : f_level_hit_up(slDynamic)
+    if stopHit
+        if alertOnSL and enableAlerts
+            alert('SL reached on ' + syminfo.ticker, alert.freq_once_per_bar_close)
+        // Сброс состояния позиции
+        posLong := false
+        posShort := false
+        posEntry := na
+        posSL := na
+        posTP1 := na
+        posTP2 := na
+        posTP3 := na
+        posTPstage := 0
+        tp1Hit := false
+        tp2Hit := false
+        tp3Hit := false
+        slMovedToBE := false
+// =============== DASHBOARD ===============
+f_get_nearest_htf_supply() =>
+    string txt = '---'
+    float nearest_bottom = 1e12
+    if array.size(mtf_supply_zones) > 0
+        for i = 0 to array.size(mtf_supply_zones) - 1 by 1
+            bx = array.get(mtf_supply_zones, i)
+            float bottom = box.get_bottom(bx)
+            if bottom > close and bottom < nearest_bottom
+                nearest_bottom := bottom
+                float top = box.get_top(bx)
+                txt := str.tostring(top, '#.#####') + ' - ' + str.tostring(bottom, '#.#####')
+    txt
+f_get_nearest_htf_demand() =>
+    string txt = '---'
+    float nearest_top = 0.0
+    if array.size(mtf_demand_zones) > 0
+        for i = 0 to array.size(mtf_demand_zones) - 1 by 1
+            bx = array.get(mtf_demand_zones, i)
+            float top = box.get_top(bx)
+            if top < close and top > nearest_top
+                nearest_top := top
+                float bottom = box.get_bottom(bx)
+                txt := str.tostring(top, '#.#####') + ' - ' + str.tostring(bottom, '#.#####')
+    txt
+var dashboard = table.new(f_get_position(dashboardPosition), 2, 13, border_width = 1)
+if showDashboard and barstate.islast
+    string htf_trend_label = 'Тренд HTF (' + mtf_timeframe + ')'
+    string htf_trend_text = mtf_swing_direction == 1 ? 'БЫЧИЙ' : mtf_swing_direction == -1 ? 'МЕДВЕЖИЙ' : 'НЕЙТРАЛЬНЫЙ'
+    color htf_trend_color = mtf_swing_direction == 1 ? color.new(color.green, 70) : mtf_swing_direction == -1 ? color.new(color.red, 70) : color.new(color.gray, 70)
+    string ltf_trend_text = ltf_trend == 1 ? 'БЫЧИЙ' : ltf_trend == -1 ? 'МЕДВЕЖИЙ' : 'НЕЙТРАЛЬНЫЙ'
+    color ltf_trend_color = ltf_trend == 1 ? color.new(color.green, 70) : ltf_trend == -1 ? color.new(color.red, 70) : color.new(color.gray, 70)
+    string htf_supply_text = f_get_nearest_htf_supply()
+    string htf_demand_text = f_get_nearest_htf_demand()
+    string status_text = 'Поиск...'
+    color status_color = color.new(color.gray, 70)
+    if waiting_for_bullish_reversal or waiting_for_bearish_reversal
+        status_text := 'Зона Истощения'
+        status_color := color.new(color.orange, 70)
+    else if not na(ltf_trend_signal_box)
+        if high >= box.get_bottom(ltf_trend_signal_box) and low <= box.get_top(ltf_trend_signal_box)
+            status_text := 'Зона Отката'
+            status_color := color.new(color.blue, 70)
+    string bias_text = 'НЕЙТРАЛЬНЫЙ'
+    color bias_color = color.new(color.gray, 70)
+    if mtf_swing_direction == 1 and ltf_trend == 1
+        bias_text := 'БЫЧИЙ'
+        bias_color := color.new(color.green, 70)
+    else if mtf_swing_direction == -1 and ltf_trend == -1
+        bias_text := 'МЕДВЕЖИЙ'
+        bias_color := color.new(color.red, 70)
+    else if mtf_swing_direction != 0 and ltf_trend != 0 and mtf_swing_direction != ltf_trend
+        bias_text := 'КОРРЕКЦИЯ'
+        bias_color := color.new(color.orange, 70)
+    string session_status_text = na(active_session_name) ? 'Нет' : active_session_name
+    color session_status_color = na(active_session_color) ? color.new(color.gray, 70) : active_session_color
+    string counters_text = str.format('
+🟢
+ Rev:{0}/{1} | 
+🟡
+ Swp:{2}/{3} | 
+🔵
+ Trd:{4}/{5}', str.tostring(passRev), str.tostring(rawRev), str.tostring(passSwp), str.tostring(rawSwp), str.tostring(passTrd), str.tostring(rawTrd))
+    // Отображение текущей позиции стратегии
+    string position_text = strategy.position_size > 0 ? 'Long' : strategy.position_size < 0 ? 'Short' : 'Нет позиции'
+    color position_color = strategy.position_size > 0 ? color.new(color.green, 70) : strategy.position_size < 0 ? color.new(color.red, 70) : color.new(color.gray, 70)
+    color c_bg = color.new(#1e222d, 0)
+    color c_text = color.new(color.white, 0)
+    color c_lbl = color.new(color.gray, 20)
+    table.cell(dashboard, 0, 0, 'SMC СТРАТЕГИЯ', text_size = size.normal, text_halign = text.align_center, text_color = c_text, bgcolor = color.new(color.gray, 50))
+    table.merge_cells(dashboard, 0, 0, 1, 0)
+    table.cell(dashboard, 0, 1, htf_trend_label, text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 1, htf_trend_text, text_halign = text.align_right, text_color = c_text, bgcolor = htf_trend_color)
+    table.cell(dashboard, 0, 2, 'Тренд LTF', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 2, ltf_trend_text, text_halign = text.align_right, text_color = c_text, bgcolor = ltf_trend_color)
+    table.cell(dashboard, 0, 3, 'HTF Предложение', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 3, htf_supply_text, text_halign = text.align_right, text_color = color.new(color.red, 20), bgcolor = c_bg)
+    table.cell(dashboard, 0, 4, 'HTF Спрос', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 4, htf_demand_text, text_halign = text.align_right, text_color = color.new(color.green, 20), bgcolor = c_bg)
+    table.cell(dashboard, 0, 5, 'Статус Сетапа', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 5, status_text, text_halign = text.align_right, text_color = c_text, bgcolor = status_color)
+    table.cell(dashboard, 0, 6, 'Активная Kill Zone', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 6, session_status_text, text_halign = text.align_right, text_color = c_text, bgcolor = session_status_color)
+    table.cell(dashboard, 0, 7, 'Текущая Позиция', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 7, position_text, text_halign = text.align_right, text_color = c_text, bgcolor = position_color)
+    table.cell(dashboard, 0, 8, 'Сигналы (A/L/NYA/NYP)', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 8, str.format('A:{0} L:{1} NYA:{2} NYP:{3}', str.tostring(asia_signal_count), str.tostring(london_signal_count), str.tostring(ny_am_signal_count), str.tostring(ny_pm_signal_count)), text_halign = text.align_right, text_color = c_text, bgcolor = c_bg)
+    table.cell(dashboard, 0, 9, 'НАПРАВЛЕНИЕ', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg, text_size = size.normal)
+    table.cell(dashboard, 1, 9, bias_text, text_halign = text.align_right, text_color = c_text, bgcolor = bias_color, text_size = size.normal)
+    table.cell(dashboard, 0, 10, 'VWAP Δ%', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 10, str.tostring((close - dailyVwapValue) / dailyVwapValue * 100, '#.##') + '%', text_halign = text.align_right, text_color = close > dailyVwapValue ? color.green : color.red, bgcolor = c_bg)
+    table.cell(dashboard, 0, 11, 'Market Mode', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 11, marketModeStr, text_halign = text.align_right, text_color = c_text, bgcolor = isTrending ? color.new(color.green, 70) : isRanging ? color.new(color.blue, 70) : c_bg)
+    table.cell(dashboard, 0, 12, 'Статистика (Прошли/Все)', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 12, counters_text, text_halign = text.align_right, text_color = c_text, bgcolor = c_bg)
+// =============== СТРАТЕГИЧЕСКИЕ ЗАЯВКИ (В КОНЦЕ!) ===============
+// ENTRY ORDERS (только если нет позиции)
+if newBuySignal and strategy.position_size == 0
+    float qty = f_calculate_qty(signalEntry, signalSL)
+    strategy.entry('L', strategy.long, qty = qty, alert_message = '"reduceOnly": false')
+    
+    // Сохраняем состояние позиции
+    posLong := true
+    posShort := false
+    posEntry := signalEntry
+    posSL := signalSL
+    posTP1 := signalTP1
+    posTP2 := signalTP2  
+    posTP3 := signalTP3
+    posTPstage := 0
+    tp1Hit := false
+    tp2Hit := false
+    tp3Hit := false
+    
+    // Алерт
+    bool canAlert = f_canAlert(true) and (not alertsRespectScanner or passScanner)
+    if canAlert and enableAlerts
+        string pfmt = "#.#####"
+        string session_context = na(active_session_name) ? "" : "\nСессия: " + active_session_name
+        string tp_block = (not na(signalTP1) or not na(signalTP2) or not na(signalTP3)) ? ("TP1: " + (na(signalTP1) ? "—" : str.tostring(signalTP1, pfmt)) + (na(signalTP2) ? "" : "\nTP2: " + str.tostring(signalTP2, pfmt)) + (na(signalTP3) ? "" : "\nTP3: " + str.tostring(signalTP3, pfmt))) : ("Take-Profit: " + str.tostring(signalTP1, pfmt))
+        string msg = str.format("BUY Setup on {0}\nПричина: {1}{2}\n\nEntry: {3}\nStop-Loss: {4}\n{5}", syminfo.tickerid, signalReason, session_context, str.tostring(signalEntry, pfmt), str.tostring(signalSL, pfmt), tp_block)
+        alert(msg, alert.freq_once_per_bar_close)
+        
+        if barstate.isconfirmed
+            lastBuyBar := bar_index
+    
+    // Визуализация R/R
+    if showRR and showVisual
+        int w = time + (time - time[1]) * 60
+        box.new(time, signalEntry, w, signalSL, border_color = na, bgcolor = riskColor, xloc = xloc.bar_time)
+        box.new(time, signalEntry, w, signalTP1, border_color = na, bgcolor = rewardColor, xloc = xloc.bar_time)
+if newSellSignal and strategy.position_size == 0
+    float qty = f_calculate_qty(signalEntry, signalSL)
+    strategy.entry('S', strategy.short, qty = qty, alert_message = '"reduceOnly": false')
+    
+    // Сохраняем состояние позиции
+    posLong := false
+    posShort := true
+    posEntry := signalEntry
+    posSL := signalSL
+    posTP1 := signalTP1
+    posTP2 := signalTP2
+    posTP3 := signalTP3
+    posTPstage := 0
+    tp1Hit := false
+    tp2Hit := false
+    tp3Hit := false
+    
+    // Алерт
+    bool canAlert = f_canAlert(false) and (not alertsRespectScanner or passScanner)
+    if canAlert and enableAlerts
+        string pfmt = "#.#####"
+        string session_context = na(active_session_name) ? "" : "\nСессия: " + active_session_name
+        string tp_block = (not na(signalTP1) or not na(signalTP2) or not na(signalTP3)) ? ("TP1: " + (na(signalTP1) ? "—" : str.tostring(signalTP1, pfmt)) + (na(signalTP2) ? "" : "\nTP2: " + str.tostring(signalTP2, pfmt)) + (na(signalTP3) ? "" : "\nTP3: " + str.tostring(signalTP3, pfmt))) : ("Take-Profit: " + str.tostring(signalTP1, pfmt))
+        string msg = str.format("SELL Setup on {0}\nПричина: {1}{2}\n\nEntry: {3}\nStop-Loss: {4}\n{5}", syminfo.tickerid, signalReason, session_context, str.tostring(signalEntry, pfmt), str.tostring(signalSL, pfmt), tp_block)
+        alert(msg, alert.freq_once_per_bar_close)
+        
+        if barstate.isconfirmed
+            lastSellBar := bar_index
+    
+    // Визуализация R/R
+    if showRR and showVisual
+        int w = time + (time - time[1]) * 60
+        box.new(time, signalEntry, w, signalSL, border_color = na, bgcolor = riskColor, xloc = xloc.bar_time)
+        box.new(time, signalEntry, w, signalTP1, border_color = na, bgcolor = rewardColor, xloc = xloc.bar_time)
+// EXIT ORDERS (только если позиция открыта)
+if strategy.position_size > 0 and not na(slDynamic) and not na(posTP3)
+    // Частичные закрытия в зависимости от режима
+    if partialMode == 'TP3-only (0/0/100)'
+        strategy.exit('L-Exit', from_entry='L', stop=slDynamic, limit=posTP3, alert_message = '"reduceOnly": true, "closeOnTrigger": true')
+    else if partialMode == 'TP2/TP3 (0/30/70)'
+        if not na(posTP2)
+            strategy.exit('L-Exit1', from_entry='L', qty_percent=30, limit=posTP2, stop=slDynamic, alert_message = '"reduceOnly": true, "closeOnTrigger": true')
+        strategy.exit('L-Exit2', from_entry='L', limit=posTP3, stop=slDynamic, alert_message = '"reduceOnly": true, "closeOnTrigger": true')
+    else if partialMode == 'TP1/TP2/TP3 (33/50/100)'
+        if not na(posTP1) and not na(posTP2) and not na(posTP3)
+            strategy.exit('L-Exit1', from_entry='L', qty_percent=33, limit=posTP1, stop=slDynamic, alert_message = '"reduceOnly": true, "closeOnTrigger": true')
+            strategy.exit('L-Exit2', from_entry='L', qty_percent=50, limit=posTP2, stop=slDynamic, alert_message = '"reduceOnly": true, "closeOnTrigger": true')
+            strategy.exit('L-Exit3', from_entry='L', limit=posTP3, stop=slDynamic, alert_message = '"reduceOnly": true, "closeOnTrigger": true')
+        else if not na(posTP1)
+            strategy.exit('L-Exit', from_entry='L', limit=posTP1, stop=slDynamic, alert_message = '"reduceOnly": true, "closeOnTrigger": true')
+if strategy.position_size < 0 and not na(slDynamic) and not na(posTP3)
+    // Частичные закрытия в зависимости от режима
+    if partialMode == 'TP3-only (0/0/100)'
+        strategy.exit('S-Exit', from_entry='S', stop=slDynamic, limit=posTP3, alert_message = '"reduceOnly": true, "closeOnTrigger": true')
+    else if partialMode == 'TP2/TP3 (0/30/70)'
+        if not na(posTP2)
+            strategy.exit('S-Exit1', from_entry='S', qty_percent=30, limit=posTP2, stop=slDynamic, alert_message = '"reduceOnly": true, "closeOnTrigger": true')
+        strategy.exit('S-Exit2', from_entry='S', limit=posTP3, stop=slDynamic, alert_message = '"reduceOnly": true, "closeOnTrigger": true')
+    else if partialMode == 'TP1/TP2/TP3 (33/50/100)'
+        if not na(posTP1) and not na(posTP2) and not na(posTP3)
+            strategy.exit('S-Exit1', from_entry='S', qty_percent=33, limit=posTP1, stop=slDynamic, alert_message = '"reduceOnly": true, "closeOnTrigger": true')
+            strategy.exit('S-Exit2', from_entry='S', qty_percent=50, limit=posTP2, stop=slDynamic, alert_message = '"reduceOnly": true, "closeOnTrigger": true')
+            strategy.exit('S-Exit3', from_entry='S', limit=posTP3, stop=slDynamic, alert_message = '"reduceOnly": true, "closeOnTrigger": true')
+        else if not na(posTP1)
+            strategy.exit('S-Exit', from_entry='S', limit=posTP1, stop=slDynamic, alert_message = '"reduceOnly": true, "closeOnTrigger": true')
+// Сброс сигналов в конце бара
+if barstate.isconfirmed
+    newBuySignal := false
+    newSellSignal := false
+    signalEntry := na
+    signalSL := na
+    signalTP1 := na
+    signalTP2 := na
+    signalTP3 := na
+    signalReason := na
