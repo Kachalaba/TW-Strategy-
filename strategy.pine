@@ -216,6 +216,33 @@ minDollarVol = input.float(10e6, 'Мін. $-оборот (SMA 20)', group = grou
 minAtrPct = input.float(1.2, 'Мін. ATR, % від ціни', group = group_scanner)
 cooldownBars = input.int(10, 'Кулдаун сигналів (барів)', group = group_scanner)
 alertsRespectScanner = input.bool(false, 'Фильтровать алерты сканером', group = group_scanner)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         📈 WYCKOFF ANALYSIS SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+group_wyckoff = '📈 Wyckoff Analysis'
+useWyckoff = input.bool(true, 'Enable Wyckoff Analysis', group=group_wyckoff)
+showWyckoffLabels = input.bool(true, 'Show VSA Labels', group=group_wyckoff, tooltip='Display Volume Spread Analysis patterns')
+showWyckoffZones = input.bool(true, 'Show Accumulation/Distribution Zones', group=group_wyckoff)
+wyckoffVolMult = input.float(2.0, 'Climax Volume Multiplier', minval=1.2, step=0.1, group=group_wyckoff)
+wyckoffLookback = input.int(50, 'Range Detection Lookback', minval=20, maxval=200, group=group_wyckoff)
+springConfirmBars = input.int(3, 'Spring Confirmation Bars', minval=1, maxval=10, group=group_wyckoff)
+
+group_wyckoff_signals = '🎯 Wyckoff Signals'
+tradeSpring = input.bool(true, 'Trade Spring Setups', group=group_wyckoff_signals)
+tradeUpthrust = input.bool(true, 'Trade Upthrust Setups', group=group_wyckoff_signals)
+tradeSOS = input.bool(true, 'Trade Sign of Strength', group=group_wyckoff_signals)
+tradeSOW = input.bool(true, 'Trade Sign of Weakness', group=group_wyckoff_signals)
+requireVolumeConfirm = input.bool(true, 'Require Volume Confirmation', group=group_wyckoff_signals)
+
+group_wyckoff_style = '🎨 Wyckoff Style'
+springColor = input.color(color.new(#00d26a, 0), 'Spring Color', group=group_wyckoff_style)
+upthrustColor = input.color(color.new(#ff6b6b, 0), 'Upthrust Color', group=group_wyckoff_style)
+accumulationColor = input.color(color.new(#3fb950, 92), 'Accumulation Zone', group=group_wyckoff_style)
+distributionColor = input.color(color.new(#f85149, 92), 'Distribution Zone', group=group_wyckoff_style)
+climaxColor = input.color(color.new(#d4a574, 0), 'Climax Volume', group=group_wyckoff_style)
+testColor = input.color(color.new(#58a6ff, 0), 'Test Bar', group=group_wyckoff_style)
+
 // =============== LIBS & CONST ===============
 import TradingView/ZigZag/7 as zigzag
 float level_1_start = 1.272
@@ -241,6 +268,138 @@ type FVG
     float bottom
     int createdBarIndex
 const int FVG_MARKER_LIMIT = 30
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         📈 WYCKOFF VSA CALCULATIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+// Volume Analysis
+avgVolume20 = ta.sma(volume, 20)
+volRatio = volume / avgVolume20
+
+// Spread (Range) Analysis
+wyckoffSpread = high - low
+avgSpread = ta.sma(wyckoffSpread, 20)
+spreadRatio = wyckoffSpread / avgSpread
+
+// Close Position within bar
+closePos = wyckoffSpread > 0 ? (close - low) / wyckoffSpread : 0.5
+isCloseUpper = closePos > 0.66
+isCloseMid = closePos >= 0.33 and closePos <= 0.66
+isCloseLower = closePos < 0.33
+
+// Body Analysis
+isBullishBar = close > open
+isBearishBar = close < open
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         🔍 VSA PATTERN DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+// Climax Volume (potential reversal)
+isClimaxVolume = volRatio >= wyckoffVolMult and spreadRatio > 1.5
+isClimaxUp = isClimaxVolume and isBullishBar and isCloseUpper
+isClimaxDown = isClimaxVolume and isBearishBar and isCloseLower
+
+// Stopping Volume (absorption)
+isStoppingVolume = volRatio >= wyckoffVolMult and spreadRatio > 1.2
+isStoppingVolumeUp = isStoppingVolume and isCloseUpper and low < low[1]
+isStoppingVolumeDown = isStoppingVolume and isCloseLower and high > high[1]
+
+// No Demand (weak rally)
+isNoDemand = volRatio < 0.7 and spreadRatio < 0.8 and isBullishBar and isCloseMid
+
+// No Supply (weak decline)  
+isNoSupply = volRatio < 0.7 and spreadRatio < 0.8 and isBearishBar and isCloseMid
+
+// Test Bar (low volume retest)
+isTestBar = volRatio < 0.5 and spreadRatio < 0.7
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         📊 WYCKOFF PHASE DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+// Range Detection
+rangeHigh = ta.highest(high, wyckoffLookback)
+rangeLow = ta.lowest(low, wyckoffLookback)
+rangeSize = rangeHigh - rangeLow
+rangeMid = (rangeHigh + rangeLow) / 2
+rangeATR = ta.atr(wyckoffLookback)
+isInRange = rangeSize < rangeATR * 3.5
+supportLevel = rangeLow
+resistanceLevel = rangeHigh
+
+// Spring Detection
+var float lastSpringLow = na
+var int lastSpringBar = na
+var bool springActive = false
+var bool springConfirmed = false
+
+potentialSpring = low < supportLevel and close > supportLevel and isStoppingVolumeUp
+if potentialSpring and not springActive
+    lastSpringLow := low
+    lastSpringBar := bar_index
+    springActive := true
+    springConfirmed := false
+
+if springActive and not springConfirmed
+    if bar_index - lastSpringBar >= springConfirmBars
+        if close > supportLevel and low > lastSpringLow
+            springConfirmed := true
+        else
+            springActive := false
+
+// Upthrust Detection
+var float lastUpthrustHigh = na
+var int lastUpthrustBar = na
+var bool upthrustActive = false
+var bool upthrustConfirmed = false
+
+potentialUpthrust = high > resistanceLevel and close < resistanceLevel and isStoppingVolumeDown
+if potentialUpthrust and not upthrustActive
+    lastUpthrustHigh := high
+    lastUpthrustBar := bar_index
+    upthrustActive := true
+    upthrustConfirmed := false
+
+if upthrustActive and not upthrustConfirmed
+    if bar_index - lastUpthrustBar >= springConfirmBars
+        if close < resistanceLevel and high < lastUpthrustHigh
+            upthrustConfirmed := true
+        else
+            upthrustActive := false
+
+// Sign of Strength/Weakness
+var bool sosOccurred = false
+isSOS = springConfirmed and isBullishBar and volRatio > 1.2 and spreadRatio > 1.2 and isCloseUpper
+isSOW = upthrustConfirmed and isBearishBar and volRatio > 1.2 and spreadRatio > 1.2 and isCloseLower
+if isSOS
+    sosOccurred := true
+
+// Determine Wyckoff Phase
+var string wyckoffPhase = "Unknown"
+var bool inAccumulation = false
+var bool inDistribution = false
+
+if isInRange
+    if isStoppingVolumeUp or springConfirmed
+        wyckoffPhase := "Accumulation"
+        inAccumulation := true
+        inDistribution := false
+    else if isStoppingVolumeDown or upthrustConfirmed
+        wyckoffPhase := "Distribution"
+        inDistribution := true
+        inAccumulation := false
+    else
+        wyckoffPhase := "Trading Range"
+else
+    if close > rangeMid
+        wyckoffPhase := "Markup"
+        inAccumulation := false
+    else
+        wyckoffPhase := "Markdown"
+        inDistribution := false
+
+// Wyckoff labels array
+var wyckoff_labels = array.new_label()
+
 // =============== HELPERS ===============
 f_get_linestyle(style_string) =>
     style_string == 'Dashed' ? line.style_dashed : style_string == 'Dotted' ? line.style_dotted : line.style_solid
@@ -1182,6 +1341,141 @@ if needFvgProcessing and bar_index > 4
         if avg_body > 0 and math.abs(close - open) > avg_body * ic_body_mult
             bg_ic := ic_color_large_body
 bgcolor(showVisual ? bg_ic : na, 90)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         📈 WYCKOFF VSA LABELS & SIGNALS
+// ═══════════════════════════════════════════════════════════════════════════════
+// Wyckoff Zone Background
+if showWyckoffZones and showVisual and isInRange and useWyckoff
+    color zoneColor = inAccumulation ? accumulationColor : inDistribution ? distributionColor : na
+    bgcolor(zoneColor, 97)
+
+// Wyckoff Labels
+if useWyckoff and showWyckoffLabels and showVisual
+    // Climax Volume labels
+    if isClimaxUp
+        lb = label.new(bar_index, high, '◆', style=label.style_none, textcolor=climaxColor, size=size.small)
+        array.push(wyckoff_labels, lb)
+    if isClimaxDown
+        lb = label.new(bar_index, low, '◆', style=label.style_none, textcolor=climaxColor, size=size.small)
+        array.push(wyckoff_labels, lb)
+    
+    // Stopping Volume
+    if isStoppingVolumeUp and not isClimaxUp
+        lb = label.new(bar_index, low, '●', style=label.style_none, textcolor=springColor, size=size.tiny)
+        array.push(wyckoff_labels, lb)
+    if isStoppingVolumeDown and not isClimaxDown
+        lb = label.new(bar_index, high, '●', style=label.style_none, textcolor=upthrustColor, size=size.tiny)
+        array.push(wyckoff_labels, lb)
+    
+    // Spring/Upthrust confirmed labels
+    if springConfirmed and bar_index == lastSpringBar + springConfirmBars
+        lb = label.new(bar_index, low, 'SPRING', style=label.style_label_up, color=color.new(springColor, 80), textcolor=springColor, size=size.small)
+        array.push(wyckoff_labels, lb)
+        springActive := false
+    
+    if upthrustConfirmed and bar_index == lastUpthrustBar + springConfirmBars
+        lb = label.new(bar_index, high, 'UT', style=label.style_label_down, color=color.new(upthrustColor, 80), textcolor=upthrustColor, size=size.small)
+        array.push(wyckoff_labels, lb)
+        upthrustActive := false
+    
+    // SOS/SOW labels
+    if isSOS
+        lb = label.new(bar_index, low, 'SOS', style=label.style_label_up, color=color.new(color.green, 85), textcolor=color.green, size=size.tiny)
+        array.push(wyckoff_labels, lb)
+    if isSOW
+        lb = label.new(bar_index, high, 'SOW', style=label.style_label_down, color=color.new(color.red, 85), textcolor=color.red, size=size.tiny)
+        array.push(wyckoff_labels, lb)
+    
+    // Manage labels array
+    while array.size(wyckoff_labels) > 50
+        lb = array.get(wyckoff_labels, 0)
+        if not na(lb)
+            label.delete(lb)
+        array.remove(wyckoff_labels, 0)
+
+// Wyckoff Trading Signals
+if useWyckoff and strategy.position_size == 0 and not newBuySignal and not newSellSignal
+    // Spring Entry (bullish)
+    if tradeSpring and springConfirmed and bar_index == lastSpringBar + springConfirmBars
+        bool volumeOk = not requireVolumeConfirm or volRatio > 1.0
+        if volumeOk and f_in_kz()
+            float entryPrice = close
+            float stopLoss = lastSpringLow - atrValue * 0.5
+            float risk = math.abs(entryPrice - stopLoss)
+            float takeProfit = entryPrice + risk * rr_ratio
+            
+            newBuySignal := true
+            signalEntry := entryPrice
+            signalSL := stopLoss
+            signalTP1 := takeProfit
+            signalTP2 := entryPrice + risk * rr_ratio * 1.5
+            signalTP3 := entryPrice + risk * rr_ratio * 2.0
+            signalReason := "Wyckoff Spring"
+            lastSignalType := 'BUY'
+            if showVisual
+                label.new(bar_index, low, 'BUY', style=label.style_label_up, color=color(na), textcolor=buyColor, size=size.large)
+    
+    // Upthrust Entry (bearish)
+    if tradeUpthrust and upthrustConfirmed and bar_index == lastUpthrustBar + springConfirmBars
+        bool volumeOk = not requireVolumeConfirm or volRatio > 1.0
+        if volumeOk and f_in_kz()
+            float entryPrice = close
+            float stopLoss = lastUpthrustHigh + atrValue * 0.5
+            float risk = math.abs(entryPrice - stopLoss)
+            float takeProfit = entryPrice - risk * rr_ratio
+            
+            newSellSignal := true
+            signalEntry := entryPrice
+            signalSL := stopLoss
+            signalTP1 := takeProfit
+            signalTP2 := entryPrice - risk * rr_ratio * 1.5
+            signalTP3 := entryPrice - risk * rr_ratio * 2.0
+            signalReason := "Wyckoff Upthrust"
+            lastSignalType := 'SELL'
+            if showVisual
+                label.new(bar_index, high, 'SELL', style=label.style_label_down, color=color(na), textcolor=sellColor, size=size.large)
+    
+    // SOS Entry
+    if tradeSOS and isSOS and not newBuySignal
+        bool volumeOk = not requireVolumeConfirm or volRatio > 1.2
+        if volumeOk and f_in_kz()
+            float entryPrice = close
+            float stopLoss = supportLevel - atrValue * 0.3
+            float risk = math.abs(entryPrice - stopLoss)
+            float takeProfit = entryPrice + risk * rr_ratio
+            
+            newBuySignal := true
+            signalEntry := entryPrice
+            signalSL := stopLoss
+            signalTP1 := takeProfit
+            signalTP2 := na
+            signalTP3 := na
+            signalReason := "Sign of Strength"
+            lastSignalType := 'BUY'
+            if showVisual
+                label.new(bar_index, low, 'BUY', style=label.style_label_up, color=color(na), textcolor=buyColor, size=size.large)
+    
+    // SOW Entry
+    if tradeSOW and isSOW and not newSellSignal
+        bool volumeOk = not requireVolumeConfirm or volRatio > 1.2
+        if volumeOk and f_in_kz()
+            float entryPrice = close
+            float stopLoss = resistanceLevel + atrValue * 0.3
+            float risk = math.abs(entryPrice - stopLoss)
+            float takeProfit = entryPrice - risk * rr_ratio
+            
+            newSellSignal := true
+            signalEntry := entryPrice
+            signalSL := stopLoss
+            signalTP1 := takeProfit
+            signalTP2 := na
+            signalTP3 := na
+            signalReason := "Sign of Weakness"
+            lastSignalType := 'SELL'
+            if showVisual
+                label.new(bar_index, high, 'SELL', style=label.style_label_down, color=color(na), textcolor=sellColor, size=size.large)
+
 // =============== TP/SL MONITORING ===============
 f_level_hit_up(lvl) => strictMode ? (high[1] < lvl and high >= lvl) : (high >= lvl)
 f_level_hit_down(lvl) => strictMode ? (low[1] > lvl and low <= lvl) : (low <= lvl)
@@ -1270,7 +1564,7 @@ f_get_nearest_htf_demand() =>
                 float bottom = box.get_bottom(bx)
                 txt := str.tostring(top, '#.#####') + ' - ' + str.tostring(bottom, '#.#####')
     txt
-var dashboard = table.new(f_get_position(dashboardPosition), 2, 13, border_width = 1)
+var dashboard = table.new(f_get_position(dashboardPosition), 2, 16, border_width = 1)
 if showDashboard and barstate.islast
     string htf_trend_label = 'Тренд HTF (' + mtf_timeframe + ')'
     string htf_trend_text = mtf_swing_direction == 1 ? 'БЫЧИЙ' : mtf_swing_direction == -1 ? 'МЕДВЕЖИЙ' : 'НЕЙТРАЛЬНЫЙ'
@@ -1340,6 +1634,18 @@ if showDashboard and barstate.islast
     table.cell(dashboard, 1, 11, marketModeStr, text_halign = text.align_right, text_color = c_text, bgcolor = isTrending ? color.new(color.green, 70) : isRanging ? color.new(color.blue, 70) : c_bg)
     table.cell(dashboard, 0, 12, 'Статистика (Прошли/Все)', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
     table.cell(dashboard, 1, 12, counters_text, text_halign = text.align_right, text_color = c_text, bgcolor = c_bg)
+    // Wyckoff Info
+    color wyckoff_phase_color = wyckoffPhase == "Accumulation" ? color.new(color.green, 70) : wyckoffPhase == "Distribution" ? color.new(color.red, 70) : wyckoffPhase == "Markup" ? color.new(color.green, 70) : wyckoffPhase == "Markdown" ? color.new(color.red, 70) : color.new(color.gray, 70)
+    table.cell(dashboard, 0, 13, '📈 Wyckoff Phase', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 13, wyckoffPhase, text_halign = text.align_right, text_color = c_text, bgcolor = wyckoff_phase_color)
+    string spring_status = springActive ? (springConfirmed ? "CONFIRMED" : "PENDING") : "—"
+    color spring_status_color = springConfirmed ? color.new(springColor, 70) : springActive ? color.new(color.orange, 70) : color.new(color.gray, 70)
+    table.cell(dashboard, 0, 14, '🟢 Spring', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 14, spring_status, text_halign = text.align_right, text_color = c_text, bgcolor = spring_status_color)
+    string ut_status = upthrustActive ? (upthrustConfirmed ? "CONFIRMED" : "PENDING") : "—"
+    color ut_status_color = upthrustConfirmed ? color.new(upthrustColor, 70) : upthrustActive ? color.new(color.orange, 70) : color.new(color.gray, 70)
+    table.cell(dashboard, 0, 15, '🔴 Upthrust', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 15, ut_status, text_halign = text.align_right, text_color = c_text, bgcolor = ut_status_color)
 // =============== СТРАТЕГИЧЕСКИЕ ЗАЯВКИ (В КОНЦЕ!) ===============
 // ENTRY ORDERS (только если нет позиции)
 if newBuySignal and strategy.position_size == 0

@@ -1,0 +1,1024 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Kamamber0564 + Wyckoff Enhancement
+//@version=6
+strategy('Wyckoff SMC PRO', overlay=true, pyramiding=0, max_bars_back=5000, commission_type=strategy.commission.percent, commission_value=0.055, max_labels_count=500, max_lines_count=500, max_boxes_count=500, initial_capital=10000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              🎨 PREMIUM COLOR PALETTE
+// ═══════════════════════════════════════════════════════════════════════════════
+// Elegant dark theme with gold accents
+color C_BG_DARK       = #0d1117
+color C_BG_CARD       = #161b22
+color C_BORDER        = #30363d
+color C_TEXT_PRIMARY  = #e6edf3
+color C_TEXT_SECONDARY= #8b949e
+color C_GOLD          = #d4a574
+color C_GOLD_DIM      = color.new(#d4a574, 70)
+color C_BULL          = #3fb950
+color C_BULL_DIM      = color.new(#3fb950, 80)
+color C_BEAR          = #f85149
+color C_BEAR_DIM      = color.new(#f85149, 80)
+color C_ACCENT_CYAN   = #58a6ff
+color C_ACCENT_PURPLE = #a371f7
+color C_ACCENT_ORANGE = #d29922
+color C_NEUTRAL       = #484f58
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              ⚙️ НАСТРОЙКИ
+// ═══════════════════════════════════════════════════════════════════════════════
+// --- CORE ---
+detectEvenIfInPosition = input.bool(true, 'Detect setups while in position')
+
+// --- DASHBOARD ---
+group_dash = '📊 Dashboard'
+showDashboard = input.bool(true, 'Show Dashboard', group=group_dash)
+dashboardPosition = input.string('Top Right', 'Position', options=['Top Right', 'Top Left', 'Bottom Right', 'Bottom Left'], group=group_dash)
+compactDashboard = input.bool(false, 'Compact Mode', group=group_dash)
+
+// --- POSITION SIZING ---
+group_risk = '💰 Position Sizing'
+riskMode = input.string('Risk per Trade ($)', 'Mode', options=['Fixed Cash ($)', 'Risk per Trade ($)', 'Risk % of Equity'], group=group_risk)
+cashPerTrade = input.float(20.0, 'Fixed cash, $', minval=1.0, group=group_risk)
+riskUsd = input.float(20.0, 'Risk per trade, $', minval=1.0, group=group_risk)
+riskPct = input.float(0.5, 'Risk % of equity', minval=0.1, maxval=10.0, group=group_risk)
+minNotionalDefault = input.float(5.0, 'Min notional (alts), $', minval=1.0, group=group_risk)
+minNotionalHeavy = input.float(100.0, 'Min notional (BTC/ETH), $', minval=10.0, group=group_risk)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         📈 WYCKOFF VSA MODULE
+// ═══════════════════════════════════════════════════════════════════════════════
+group_wyckoff = '📈 Wyckoff Analysis'
+useWyckoff = input.bool(true, 'Enable Wyckoff Analysis', group=group_wyckoff)
+showWyckoffLabels = input.bool(true, 'Show VSA Labels', group=group_wyckoff, tooltip='Display Volume Spread Analysis patterns')
+showWyckoffZones = input.bool(true, 'Show Accumulation/Distribution Zones', group=group_wyckoff)
+wyckoffVolMult = input.float(2.0, 'Climax Volume Multiplier', minval=1.2, step=0.1, group=group_wyckoff)
+wyckoffLookback = input.int(50, 'Range Detection Lookback', minval=20, maxval=200, group=group_wyckoff)
+springConfirmBars = input.int(3, 'Spring Confirmation Bars', minval=1, maxval=10, group=group_wyckoff)
+
+// Wyckoff Signal Filters
+group_wyckoff_signals = '🎯 Wyckoff Signals'
+tradeSpring = input.bool(true, 'Trade Spring Setups', group=group_wyckoff_signals)
+tradeUpthrust = input.bool(true, 'Trade Upthrust Setups', group=group_wyckoff_signals)
+tradeSOS = input.bool(true, 'Trade Sign of Strength', group=group_wyckoff_signals)
+tradeSOW = input.bool(true, 'Trade Sign of Weakness', group=group_wyckoff_signals)
+requireVolumeConfirm = input.bool(true, 'Require Volume Confirmation', group=group_wyckoff_signals)
+
+// Wyckoff Colors (Premium)
+group_wyckoff_style = '🎨 Wyckoff Style'
+springColor = input.color(color.new(#00d26a, 0), 'Spring Color', group=group_wyckoff_style)
+upthrustColor = input.color(color.new(#ff6b6b, 0), 'Upthrust Color', group=group_wyckoff_style)
+accumulationColor = input.color(color.new(#3fb950, 90), 'Accumulation Zone', group=group_wyckoff_style)
+distributionColor = input.color(color.new(#f85149, 90), 'Distribution Zone', group=group_wyckoff_style)
+climaxColor = input.color(color.new(#d4a574, 0), 'Climax Volume', group=group_wyckoff_style)
+testColor = input.color(color.new(#58a6ff, 0), 'Test Bar', group=group_wyckoff_style)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         🔥 SMC CORE SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+group_smc = '🔥 SMC Core'
+showLiquidity = input.bool(true, 'Show Liquidity (BSL/SSL)', group=group_smc)
+showBreakEvents = input.bool(true, 'Show BOS/CHOCH Events', group=group_smc)
+showReversalSignals = input.bool(true, 'Show Reversal Signals', group=group_smc)
+showSweepSignals = input.bool(true, 'Show Sweep Signals', group=group_smc)
+showTrendSignals = input.bool(true, 'Show Trend Signals', group=group_smc)
+
+// SMC Colors
+group_smc_style = '🎨 SMC Style'
+bslColor = input.color(color.new(#58a6ff, 25), 'BSL Color', group=group_smc_style)
+sslColor = input.color(color.new(#d29922, 25), 'SSL Color', group=group_smc_style)
+bullishBosColor = input.color(color.new(#3fb950, 0), 'Bullish BOS', group=group_smc_style)
+bearishBosColor = input.color(color.new(#f85149, 0), 'Bearish BOS', group=group_smc_style)
+bullishChochColor = input.color(color.new(#58a6ff, 0), 'Bullish CHOCH', group=group_smc_style)
+bearishChochColor = input.color(color.new(#d29922, 0), 'Bearish CHOCH', group=group_smc_style)
+buyColor = input.color(color.new(#3fb950, 0), 'BUY Label', group=group_smc_style)
+sellColor = input.color(color.new(#f85149, 0), 'SELL Label', group=group_smc_style)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         📊 VWAP & FILTERS
+// ═══════════════════════════════════════════════════════════════════════════════
+group_vwap = '📊 VWAP & Bands'
+showVWAP = input.bool(true, 'Show Daily VWAP', group=group_vwap, inline='vwap1')
+showWeeklyVWAP = input.bool(true, 'Show Weekly VWAP', group=group_vwap, inline='vwap1')
+showBands = input.bool(true, 'Show σ-Bands', group=group_vwap, inline='vwap2')
+stdMultiplier = input.float(1.0, 'σ Multiplier', minval=0.1, step=0.1, group=group_vwap, inline='vwap2')
+useVwapFilter = input.bool(true, 'Filter Signals by VWAP', group=group_vwap)
+
+// Market Mode Filter
+group_mode_filter = '📈 Market Mode'
+useTrendModeFilter = input.bool(true, 'Enable Market Mode Filter', group=group_mode_filter)
+trendThresh_Trend = input.float(1.15, 'TREND threshold (ATR/σ)', minval=0.5, step=0.05, group=group_mode_filter)
+trendThresh_Range = input.float(0.85, 'RANGE threshold (ATR/σ)', minval=0.1, step=0.05, group=group_mode_filter)
+trendAtrPeriod = input.int(14, 'ATR Period', group=group_mode_filter, inline='tr1')
+trendStdevPeriod = input.int(14, 'StDev Period', group=group_mode_filter, inline='tr1')
+
+// Volume
+group_volume = '📊 Volume Analysis'
+useVolumeSpike = input.bool(true, 'Use Volume Spikes', group=group_volume)
+volumeLookback = input.int(120, 'Percentile Window', minval=10, group=group_volume, inline='vol1')
+volumePercentile = input.int(85, 'Volume Percentile', minval=50, maxval=99, group=group_volume, inline='vol1')
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         ⏰ KILL ZONES
+// ═══════════════════════════════════════════════════════════════════════════════
+group_kz = '⏰ Kill Zones (EST)'
+enableKzFilter = input.bool(true, 'Enable Kill Zone Filter', group=group_kz)
+showKzBackground = input.bool(true, 'Show Kill Zone Background', group=group_kz)
+kzOnly = input.bool(false, 'Trade Only in Kill Zones', group=group_kz)
+kz_asia_color = input.color(color.new(#d29922, 92), 'Asia', group=group_kz, inline='kz1')
+kz_london_color = input.color(color.new(#a371f7, 92), 'London', group=group_kz, inline='kz1')
+kz_ny_am_color = input.color(color.new(#58a6ff, 92), 'NY AM', group=group_kz, inline='kz2')
+kz_ny_pm_color = input.color(color.new(#3fb950, 92), 'NY PM', group=group_kz, inline='kz2')
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         🎯 TAKE PROFIT & STOP LOSS
+// ═══════════════════════════════════════════════════════════════════════════════
+group_rr = '🎯 Risk/Reward'
+tp_mode = input.string('Risk/Reward', 'TP Mode', options=['Risk/Reward', 'Liquidity Target', 'Prioritized (TP1/TP2/TP3)'], group=group_rr)
+rr_ratio = input.float(2.0, 'R/R Ratio', minval=0.1, step=0.1, group=group_rr)
+showRR = input.bool(true, 'Show R/R Visualization', group=group_rr)
+riskColor = input.color(color.new(#f85149, 85), 'Risk Zone', group=group_rr)
+rewardColor = input.color(color.new(#3fb950, 85), 'Reward Zone', group=group_rr)
+
+// Trailing Stop
+group_trail = '📍 Trailing Stop'
+useTrailingStop = input.bool(true, 'Enable Chandelier Stop', group=group_trail)
+trailStopLength = input.int(22, 'High/Low Window', minval=5, group=group_trail, inline='ts1')
+trailStopAtrMult = input.float(2.5, 'ATR Multiplier', minval=0.5, step=0.1, group=group_trail, inline='ts1')
+
+// Partial Closes
+group_partial = '📊 Partial Closes'
+partialMode = input.string('TP3-only (0/0/100)', 'Mode', options=['TP3-only (0/0/100)', 'TP2/TP3 (0/30/70)', 'TP1/TP2/TP3 (33/50/100)'], group=group_partial)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         📦 FVG SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+group_fvg = '📦 FVG / Imbalance'
+showIC = input.bool(true, 'Enable FVG Detection', group=group_fvg)
+useFvgSignals = input.bool(true, 'Trade FVG Fills', group=group_fvg)
+useInversionFvg = input.bool(true, 'Trade Inversion FVG', group=group_fvg)
+fvgAsTP = input.bool(true, 'Use FVG as Take Profit', group=group_fvg)
+fvgMinSize = input.float(0.1, 'Min FVG Size %', minval=0.0, group=group_fvg)
+ic_max_count = input.int(15, 'Max FVG on Chart', minval=1, group=group_fvg)
+ic_color_fvg_bull = input.color(color.new(#3fb950, 88), 'Bullish FVG', group=group_fvg)
+ic_color_fvg_bear = input.color(color.new(#f85149, 88), 'Bearish FVG', group=group_fvg)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         🔧 ADVANCED
+// ═══════════════════════════════════════════════════════════════════════════════
+group_adv = '🔧 Advanced'
+tradingMode = input.string('Swing', 'Trading Mode', options=['Intraday', 'Swing'], group=group_adv)
+filterByHtfZone = input.bool(false, 'Filter by HTF Zone', group=group_adv)
+strictMode = input.bool(true, 'Strict Mode (signal on close)', group=group_adv)
+history_depth = input.int(200, 'Analysis Depth (bars)', minval=50, group=group_adv)
+showVisual = input.bool(true, 'Show Visual Elements', group=group_adv)
+
+// MTF
+group_mtf = '📈 Multi-Timeframe'
+mtf_enabled = input.bool(true, 'Enable MTF Analysis', group=group_mtf)
+mtf_timeframe = input.timeframe('240', 'Higher Timeframe', group=group_mtf)
+mtf_depth = input.int(10, 'MTF Pivot Depth', minval=2, group=group_mtf)
+mtf_min_swing_percent = input.float(1.0, 'MTF Min Swing %', minval=0, step=0.1, group=group_mtf)
+
+// LTF ZigZag
+group_ltf = '🔍 Local Timeframe'
+ltf_threshold_multiplier = input.float(3.0, 'LTF Deviation %', minval=0, group=group_ltf)
+ltf_depth = input.int(10, 'LTF Depth', minval=2, group=group_ltf)
+
+// Cooldown
+group_scanner = '⏱️ Cooldown'
+cooldownBars = input.int(10, 'Signal Cooldown (bars)', group=group_scanner)
+
+// Alerts
+group_alerts = '🔔 Alerts'
+enableAlerts = input.bool(true, 'Enable Alerts', group=group_alerts)
+alertOnKzEnter = input.bool(true, 'Alert on Kill Zone Enter', group=group_alerts)
+alertOnTPs = input.bool(true, 'Alert on TP Hit', group=group_alerts)
+moveSLtoBE = input.bool(true, 'Move SL to BE after TP1', group=group_alerts)
+alertOnSL = input.bool(true, 'Alert on SL Hit', group=group_alerts)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         📚 LIBRARIES & TYPES
+// ═══════════════════════════════════════════════════════════════════════════════
+import TradingView/ZigZag/7 as zigzag
+
+float level_1_start = 1.272
+float level_1_end = 1.618
+float level_2_start = -1.272
+float level_2_end = -1.618
+
+type BreakPoint
+    float price
+    int time
+    bool isHigh
+    bool broken
+    line liqLine
+
+type FVG
+    box fvgBox
+    bool isBullish
+    float top
+    float bottom
+    int createdBarIndex
+
+type WyckoffZone
+    box zoneBox
+    bool isAccumulation
+    float top
+    float bottom
+    int createdBar
+    string phase
+    bool confirmed
+
+const int FVG_MARKER_LIMIT = 30
+const int WYCKOFF_ZONE_LIMIT = 5
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         📈 WYCKOFF VSA CALCULATIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+// Volume Analysis
+avgVolume20 = ta.sma(volume, 20)
+avgVolume50 = ta.sma(volume, 50)
+volRatio = volume / avgVolume20
+
+// Spread (Range) Analysis
+spread = high - low
+avgSpread = ta.sma(spread, 20)
+spreadRatio = spread / avgSpread
+
+// Close Position within bar
+closePos = spread > 0 ? (close - low) / spread : 0.5
+isCloseUpper = closePos > 0.66
+isCloseMid = closePos >= 0.33 and closePos <= 0.66
+isCloseLower = closePos < 0.33
+
+// Body Analysis
+body = math.abs(close - open)
+upperWick = high - math.max(close, open)
+lowerWick = math.min(close, open) - low
+isBullishBar = close > open
+isBearishBar = close < open
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         🔍 VSA PATTERN DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+// Climax Volume (potential reversal)
+isClimaxVolume = volRatio >= wyckoffVolMult and spreadRatio > 1.5
+isClimaxUp = isClimaxVolume and isBullishBar and isCloseUpper
+isClimaxDown = isClimaxVolume and isBearishBar and isCloseLower
+
+// Stopping Volume (absorption)
+isStoppingVolume = volRatio >= wyckoffVolMult and spreadRatio > 1.2
+isStoppingVolumeUp = isStoppingVolume and isCloseUpper and low < low[1]
+isStoppingVolumeDown = isStoppingVolume and isCloseLower and high > high[1]
+
+// No Demand (weak rally, expecting down)
+isNoDemand = volRatio < 0.7 and spreadRatio < 0.8 and isBullishBar and isCloseMid
+
+// No Supply (weak decline, expecting up)  
+isNoSupply = volRatio < 0.7 and spreadRatio < 0.8 and isBearishBar and isCloseMid
+
+// Test Bar (low volume retest)
+isTestBar = volRatio < 0.5 and spreadRatio < 0.7
+
+// Effort vs Result (divergence)
+effortUp = isBullishBar and volRatio > 1.5 and spreadRatio < 0.7
+effortDown = isBearishBar and volRatio > 1.5 and spreadRatio < 0.7
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         📊 WYCKOFF PHASE DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+// Range Detection
+rangeHigh = ta.highest(high, wyckoffLookback)
+rangeLow = ta.lowest(low, wyckoffLookback)
+rangeSize = rangeHigh - rangeLow
+rangeMid = (rangeHigh + rangeLow) / 2
+rangeATR = ta.atr(wyckoffLookback)
+
+// Is price in a trading range?
+isInRange = rangeSize < rangeATR * 3.5
+
+// Support/Resistance from range
+supportLevel = rangeLow
+resistanceLevel = rangeHigh
+
+// Spring Detection (false breakdown of support with recovery)
+var float lastSpringLow = na
+var int lastSpringBar = na
+var bool springActive = false
+var bool springConfirmed = false
+
+// Check for Spring
+potentialSpring = low < supportLevel and close > supportLevel and isStoppingVolumeUp
+if potentialSpring and not springActive
+    lastSpringLow := low
+    lastSpringBar := bar_index
+    springActive := true
+    springConfirmed := false
+
+// Confirm Spring (price stays above after X bars)
+if springActive and not springConfirmed
+    if bar_index - lastSpringBar >= springConfirmBars
+        if close > supportLevel and low > lastSpringLow
+            springConfirmed := true
+        else
+            springActive := false
+
+// Upthrust Detection (false breakout of resistance with rejection)
+var float lastUpthrustHigh = na
+var int lastUpthrustBar = na
+var bool upthrustActive = false
+var bool upthrustConfirmed = false
+
+potentialUpthrust = high > resistanceLevel and close < resistanceLevel and isStoppingVolumeDown
+if potentialUpthrust and not upthrustActive
+    lastUpthrustHigh := high
+    lastUpthrustBar := bar_index
+    upthrustActive := true
+    upthrustConfirmed := false
+
+if upthrustActive and not upthrustConfirmed
+    if bar_index - lastUpthrustBar >= springConfirmBars
+        if close < resistanceLevel and high < lastUpthrustHigh
+            upthrustConfirmed := true
+        else
+            upthrustActive := false
+
+// Sign of Strength (SOS) - Strong bullish bar after Spring
+isSOS = springConfirmed and isBullishBar and volRatio > 1.2 and spreadRatio > 1.2 and isCloseUpper
+
+// Sign of Weakness (SOW) - Strong bearish bar after Upthrust
+isSOW = upthrustConfirmed and isBearishBar and volRatio > 1.2 and spreadRatio > 1.2 and isCloseLower
+
+// Last Point of Support (LPS) - Pullback after SOS
+var bool sosOccurred = false
+if isSOS
+    sosOccurred := true
+
+isLPS = sosOccurred and isTestBar and low > supportLevel and isCloseUpper
+
+// Determine Wyckoff Phase
+var string wyckoffPhase = "Unknown"
+var bool inAccumulation = false
+var bool inDistribution = false
+
+if isInRange
+    if isStoppingVolumeUp or springConfirmed
+        wyckoffPhase := "Accumulation"
+        inAccumulation := true
+        inDistribution := false
+    else if isStoppingVolumeDown or upthrustConfirmed
+        wyckoffPhase := "Distribution"
+        inDistribution := true
+        inAccumulation := false
+    else
+        wyckoffPhase := "Trading Range"
+else
+    if close > rangeMid
+        wyckoffPhase := "Markup"
+        inAccumulation := false
+    else
+        wyckoffPhase := "Markdown"
+        inDistribution := false
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         🛠️ HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+f_get_linestyle(style_string) =>
+    style_string == 'Dashed' ? line.style_dashed : style_string == 'Dotted' ? line.style_dotted : line.style_solid
+
+f_get_position(string_pos) =>
+    switch string_pos
+        'Top Right' => position.top_right
+        'Top Left' => position.top_left
+        'Bottom Right' => position.bottom_right
+        'Bottom Left' => position.bottom_left
+
+f_in_kz() => not kzOnly or not na(time(timeframe.period, '0800-1100'))
+
+f_calculate_qty(float entryPrice, float stopLoss) =>
+    bool isHeavy = str.contains(syminfo.ticker, "BTC") or str.contains(syminfo.ticker, "ETH")
+    float notionalMin = isHeavy ? minNotionalHeavy : minNotionalDefault
+    float qtyMin = notionalMin / entryPrice
+    float qtyComputed = 0.0
+    if riskMode == 'Fixed Cash ($)'
+        qtyComputed := cashPerTrade / entryPrice
+    else if riskMode == 'Risk per Trade ($)'
+        float risk = math.max(math.abs(entryPrice - stopLoss), syminfo.mintick)
+        qtyComputed := riskUsd / risk
+    else if riskMode == 'Risk % of Equity'
+        float riskUsdCalc = strategy.equity * (riskPct / 100)
+        float risk = math.max(math.abs(entryPrice - stopLoss), syminfo.mintick)
+        qtyComputed := riskUsdCalc / risk
+    math.max(qtyComputed, qtyMin)
+
+round_tick(x) => math.round(x/syminfo.mintick)*syminfo.mintick
+
+// Array management
+manage_array_of_boxes(array<box> a, int max_size) =>
+    while array.size(a) > max_size
+        bx = array.get(a, 0)
+        if not na(bx)
+            box.delete(bx)
+        array.remove(a, 0)
+
+manage_array_of_lines(array<line> a, int max_size) =>
+    while array.size(a) > max_size
+        ln = array.get(a, 0)
+        if not na(ln)
+            line.delete(ln)
+        array.remove(a, 0)
+
+manage_array_of_labels(array<label> a, int max_size) =>
+    while array.size(a) > max_size
+        lb = array.get(a, 0)
+        if not na(lb)
+            label.delete(lb)
+        array.remove(a, 0)
+
+manage_fvg_zones(array<FVG> fvg_array, int max_size) =>
+    while array.size(fvg_array) > max_size
+        item = array.get(fvg_array, 0)
+        if not na(item.fvgBox)
+            box.delete(item.fvgBox)
+        array.remove(fvg_array, 0)
+
+manage_array_of_breakPoints(array<BreakPoint> a, int max_size) =>
+    while array.size(a) > max_size
+        p = array.get(a, 0)
+        if showVisual and showLiquidity and not na(p.liqLine)
+            line.delete(p.liqLine)
+        array.remove(a, 0)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         🌐 GLOBAL VARIABLES
+// ═══════════════════════════════════════════════════════════════════════════════
+var ltf_settings = zigzag.Settings.new(ltf_threshold_multiplier, ltf_depth, na, false, false, false, false, 'Absolute', true)
+var ltf_zigZag = zigzag.newInstance(ltf_settings)
+var ltf_breakPoints = array.new<BreakPoint>()
+var ltf_fibBoxes1 = array.new_box()
+var ltf_fibBoxes2 = array.new_box()
+var ltf_lines0 = array.new_line()
+var ltf_lines1 = array.new_line()
+var fvg_zones = array.new<FVG>()
+var fvg_fill_labels = array.new_label()
+var wyckoff_labels = array.new_label()
+var wyckoff_zones = array.new<WyckoffZone>()
+
+var int ltf_trend = 0
+var float ltf_protected_high = na
+var int ltf_protected_high_time = na
+var float ltf_protected_low = na
+var int ltf_protected_low_time = na
+var ltf_line_style = line.style_dashed
+
+var string lastSignalType = na
+var float trailingLongStop = na
+var float trailingShortStop = na
+
+float atrValue = ta.atr(14)
+
+// Position state
+var bool posLong = false
+var bool posShort = false
+var float posEntry = na
+var float posSL = na
+var float posTP1 = na
+var float posTP2 = na
+var float posTP3 = na
+var int posTPstage = 0
+var bool slMovedToBE = false
+var int lastBuyBar = 0
+var int lastSellBar = 0
+
+// Signal state
+var bool newBuySignal = false
+var bool newSellSignal = false
+var float signalEntry = na
+var float signalSL = na
+var float signalTP1 = na
+var float signalTP2 = na
+var float signalTP3 = na
+var string signalReason = na
+
+// MTF
+var mtf_structurePoints = array.new<BreakPoint>()
+var mtf_supply_zones = array.new_box()
+var mtf_demand_zones = array.new_box()
+var int mtf_swing_direction = 0
+
+// Stats
+varip int wyckoffSignals = 0
+varip int smcSignals = 0
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         📊 VWAP & MARKET MODE
+// ═══════════════════════════════════════════════════════════════════════════════
+dailyVwapValue = ta.vwap(hlc3)
+weeklyVwapValue = request.security(syminfo.tickerid, 'W', ta.vwap(hlc3))
+vwapStdev = ta.stdev(close, 20)
+upperVwapBand = dailyVwapValue + vwapStdev * stdMultiplier
+lowerVwapBand = dailyVwapValue - vwapStdev * stdMultiplier
+
+trendFactor = ta.atr(trendAtrPeriod) / ta.stdev(close, trendStdevPeriod)
+isTrending = trendFactor > trendThresh_Trend
+isRanging = trendFactor < trendThresh_Range
+marketModeStr = isTrending ? 'TREND' : isRanging ? 'RANGE' : 'CHOPPY'
+
+isVolumeSpikeActive = volume > ta.percentile_nearest_rank(volume, volumeLookback, volumePercentile)
+
+f_canAlert(bool isLong) =>
+    isLong ? bar_index - lastBuyBar > cooldownBars : bar_index - lastSellBar > cooldownBars
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         ⏰ SESSIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+var string TIMEZONE = 'America/New_York'
+session_asia = time(timeframe.period, '2000-2200', TIMEZONE)
+session_london = time(timeframe.period, '0200-0500', TIMEZONE)
+session_ny_am = time(timeframe.period, '0800-1100', TIMEZONE)
+session_ny_pm = time(timeframe.period, '1300-1500', TIMEZONE)
+
+f_get_active_session_info() =>
+    if not na(session_asia)
+        ['Asia', kz_asia_color]
+    else if not na(session_london)
+        ['London', kz_london_color]
+    else if not na(session_ny_am)
+        ['NY AM', kz_ny_am_color]
+    else if not na(session_ny_pm)
+        ['NY PM', kz_ny_pm_color]
+    else
+        [string(na), color(na)]
+
+[active_session_name, active_session_color] = f_get_active_session_info()
+bgcolor(showVisual and showKzBackground and not na(active_session_color) ? active_session_color : na, 95)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         🎨 VISUAL PLOTS (Premium Style)
+// ═══════════════════════════════════════════════════════════════════════════════
+// VWAP - thin elegant lines
+plot(showVisual and showVWAP ? dailyVwapValue : na, title='VWAP D', color=color.new(#d29922, 20), linewidth=1)
+plot(showVisual and showWeeklyVWAP ? weeklyVwapValue : na, title='VWAP W', color=color.new(#a371f7, 20), linewidth=1)
+pU = plot(showVisual and showBands ? upperVwapBand : na, title='Upper Band', color=color.new(#d29922, 80), linewidth=1)
+pL = plot(showVisual and showBands ? lowerVwapBand : na, title='Lower Band', color=color.new(#d29922, 80), linewidth=1)
+fill(pU, pL, color=showVisual ? color.new(#d29922, 95) : na)
+
+// Trailing stops - subtle
+plot(showVisual and useTrailingStop ? trailingLongStop : na, title='Trail Long', color=color.new(#3fb950, 40), linewidth=1, style=plot.style_steplinebr)
+plot(showVisual and useTrailingStop ? trailingShortStop : na, title='Trail Short', color=color.new(#f85149, 40), linewidth=1, style=plot.style_steplinebr)
+
+// Chandelier trailing stop
+chandelierLongStopValue = ta.highest(high, trailStopLength) - ta.atr(14) * trailStopAtrMult
+chandelierShortStopValue = ta.lowest(low, trailStopLength) + ta.atr(14) * trailStopAtrMult
+if lastSignalType == 'BUY'
+    trailingLongStop := na(trailingLongStop) ? chandelierLongStopValue : math.max(trailingLongStop, chandelierLongStopValue)
+    trailingShortStop := na
+else if lastSignalType == 'SELL'
+    trailingShortStop := na(trailingShortStop) ? chandelierShortStopValue : math.min(trailingShortStop, chandelierShortStopValue)
+    trailingLongStop := na
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         📈 WYCKOFF VSA LABELS (Premium Style)
+// ═══════════════════════════════════════════════════════════════════════════════
+if useWyckoff and showWyckoffLabels and showVisual
+    // Climax labels - gold diamond
+    if isClimaxUp
+        lb = label.new(bar_index, high, '◆', style=label.style_none, textcolor=climaxColor, size=size.small)
+        array.push(wyckoff_labels, lb)
+    if isClimaxDown
+        lb = label.new(bar_index, low, '◆', style=label.style_none, textcolor=climaxColor, size=size.small)
+        array.push(wyckoff_labels, lb)
+    
+    // Stopping Volume
+    if isStoppingVolumeUp and not isClimaxUp
+        lb = label.new(bar_index, low, '●', style=label.style_none, textcolor=springColor, size=size.tiny)
+        array.push(wyckoff_labels, lb)
+    if isStoppingVolumeDown and not isClimaxDown
+        lb = label.new(bar_index, high, '●', style=label.style_none, textcolor=upthrustColor, size=size.tiny)
+        array.push(wyckoff_labels, lb)
+    
+    // Spring/Upthrust confirmed
+    if springConfirmed and bar_index == lastSpringBar + springConfirmBars
+        lb = label.new(bar_index, low, 'SPRING', style=label.style_label_up, color=color.new(springColor, 80), textcolor=springColor, size=size.small)
+        array.push(wyckoff_labels, lb)
+        springActive := false
+    
+    if upthrustConfirmed and bar_index == lastUpthrustBar + springConfirmBars
+        lb = label.new(bar_index, high, 'UT', style=label.style_label_down, color=color.new(upthrustColor, 80), textcolor=upthrustColor, size=size.small)
+        array.push(wyckoff_labels, lb)
+        upthrustActive := false
+    
+    // SOS/SOW labels
+    if isSOS
+        lb = label.new(bar_index, low, 'SOS', style=label.style_label_up, color=color.new(C_BULL, 85), textcolor=C_BULL, size=size.tiny)
+        array.push(wyckoff_labels, lb)
+    if isSOW
+        lb = label.new(bar_index, high, 'SOW', style=label.style_label_down, color=color.new(C_BEAR, 85), textcolor=C_BEAR, size=size.tiny)
+        array.push(wyckoff_labels, lb)
+    
+    // Test bar
+    if isTestBar and (sosOccurred or springConfirmed)
+        lb = label.new(bar_index, low, 'T', style=label.style_none, textcolor=testColor, size=size.tiny)
+        array.push(wyckoff_labels, lb)
+    
+    manage_array_of_labels(wyckoff_labels, 50)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         🔄 ZIGZAG UPDATE
+// ═══════════════════════════════════════════════════════════════════════════════
+ltf_settings.devThreshold := ta.atr(10) / close * 100 * ltf_threshold_multiplier
+bool isNewPivot = ltf_zigZag.update()
+
+if isNewPivot
+    lastP = ltf_zigZag.lastPivot()
+    int startOffset = ta.barssince(time == lastP.start.time)
+    int endOffset = ta.barssince(time == lastP.end.time)
+    float startPrice = lastP.start.price
+    float endPrice = lastP.end.price
+    float highPrice = math.max(startPrice, endPrice)
+    float lowPrice = math.min(startPrice, endPrice)
+    int highTime = endPrice > startPrice ? lastP.end.time : lastP.start.time
+    int lowTime = endPrice < startPrice ? lastP.end.time : lastP.start.time
+    
+    line highLiqLine = showVisual and showLiquidity ? line.new(highTime, highPrice, time, highPrice, xloc=xloc.bar_time, color=bslColor, style=ltf_line_style, width=1) : na
+    line lowLiqLine = showVisual and showLiquidity ? line.new(lowTime, lowPrice, time, lowPrice, xloc=xloc.bar_time, color=sslColor, style=ltf_line_style, width=1) : na
+    
+    array.push(ltf_breakPoints, BreakPoint.new(highPrice, highTime, true, false, highLiqLine))
+    array.push(ltf_breakPoints, BreakPoint.new(lowPrice, lowTime, false, false, lowLiqLine))
+    
+    if na(ltf_protected_high) or highPrice > ltf_protected_high
+        if ltf_trend == 1
+            ltf_protected_low := lowPrice
+            ltf_protected_low_time := lowTime
+        ltf_protected_high := highPrice
+        ltf_protected_high_time := highTime
+        if ltf_trend == 0
+            ltf_trend := 1
+    if na(ltf_protected_low) or lowPrice < ltf_protected_low
+        if ltf_trend == -1
+            ltf_protected_high := highPrice
+            ltf_protected_high_time := highTime
+        ltf_protected_low := lowPrice
+        ltf_protected_low_time := lowTime
+        if ltf_trend == 0
+            ltf_trend := -1
+
+// Extend liquidity lines
+if showVisual and showLiquidity
+    for p in ltf_breakPoints
+        if not p.broken and not na(p.liqLine)
+            line.set_x2(p.liqLine, time)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         📊 BOS/CHOCH DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+if showBreakEvents
+    bool isBearishChochCross = ta.crossunder(close, ltf_protected_low)
+    bool isBullishChochCross = ta.crossover(close, ltf_protected_high)
+    
+    if ltf_trend == 1 and not na(ltf_protected_low) and isBearishChochCross
+        ltf_trend := -1
+        if showVisual
+            line.new(ltf_protected_low_time, ltf_protected_low, time, ltf_protected_low, color=bearishChochColor, width=2, xloc=xloc.bar_time)
+            label.new(bar_index, ltf_protected_low, 'CHOCH', style=label.style_label_down, textcolor=bearishChochColor, color=color(na), size=size.tiny)
+    else if ltf_trend == -1 and not na(ltf_protected_high) and isBullishChochCross
+        ltf_trend := 1
+        if showVisual
+            line.new(ltf_protected_high_time, ltf_protected_high, time, ltf_protected_high, color=bullishChochColor, width=2, xloc=xloc.bar_time)
+            label.new(bar_index, ltf_protected_high, 'CHOCH', style=label.style_label_up, textcolor=bullishChochColor, color=color(na), size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                    🎯 WYCKOFF TRADING SIGNALS (Integrated with SMC)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Spring Entry Signal
+wyckoffBuySignal = false
+wyckoffSellSignal = false
+
+if useWyckoff and strategy.position_size == 0
+    // Spring Entry (bullish)
+    if tradeSpring and springConfirmed and bar_index == lastSpringBar + springConfirmBars
+        bool volumeOk = not requireVolumeConfirm or isVolumeSpikeActive or volRatio > 1.0
+        if volumeOk and f_in_kz() and f_canAlert(true)
+            float entryPrice = close
+            float stopLoss = lastSpringLow - atrValue * 0.5
+            float risk = math.abs(entryPrice - stopLoss)
+            float takeProfit = entryPrice + risk * rr_ratio
+            
+            newBuySignal := true
+            signalEntry := entryPrice
+            signalSL := stopLoss
+            signalTP1 := takeProfit
+            signalTP2 := entryPrice + risk * rr_ratio * 1.5
+            signalTP3 := entryPrice + risk * rr_ratio * 2.0
+            signalReason := "Wyckoff Spring"
+            lastSignalType := 'BUY'
+            wyckoffSignals := wyckoffSignals + 1
+            wyckoffBuySignal := true
+    
+    // Upthrust Entry (bearish)
+    if tradeUpthrust and upthrustConfirmed and bar_index == lastUpthrustBar + springConfirmBars
+        bool volumeOk = not requireVolumeConfirm or isVolumeSpikeActive or volRatio > 1.0
+        if volumeOk and f_in_kz() and f_canAlert(false)
+            float entryPrice = close
+            float stopLoss = lastUpthrustHigh + atrValue * 0.5
+            float risk = math.abs(entryPrice - stopLoss)
+            float takeProfit = entryPrice - risk * rr_ratio
+            
+            newSellSignal := true
+            signalEntry := entryPrice
+            signalSL := stopLoss
+            signalTP1 := takeProfit
+            signalTP2 := entryPrice - risk * rr_ratio * 1.5
+            signalTP3 := entryPrice - risk * rr_ratio * 2.0
+            signalReason := "Wyckoff Upthrust"
+            lastSignalType := 'SELL'
+            wyckoffSignals := wyckoffSignals + 1
+            wyckoffSellSignal := true
+    
+    // SOS Entry (trend continuation after Spring)
+    if tradeSOS and isSOS and not wyckoffBuySignal
+        bool volumeOk = not requireVolumeConfirm or volRatio > 1.2
+        if volumeOk and f_in_kz() and f_canAlert(true)
+            float entryPrice = close
+            float stopLoss = supportLevel - atrValue * 0.3
+            float risk = math.abs(entryPrice - stopLoss)
+            float takeProfit = entryPrice + risk * rr_ratio
+            
+            newBuySignal := true
+            signalEntry := entryPrice
+            signalSL := stopLoss
+            signalTP1 := takeProfit
+            signalTP2 := na
+            signalTP3 := na
+            signalReason := "Sign of Strength"
+            lastSignalType := 'BUY'
+            wyckoffSignals := wyckoffSignals + 1
+    
+    // SOW Entry (trend continuation after Upthrust)
+    if tradeSOW and isSOW and not wyckoffSellSignal
+        bool volumeOk = not requireVolumeConfirm or volRatio > 1.2
+        if volumeOk and f_in_kz() and f_canAlert(false)
+            float entryPrice = close
+            float stopLoss = resistanceLevel + atrValue * 0.3
+            float risk = math.abs(entryPrice - stopLoss)
+            float takeProfit = entryPrice - risk * rr_ratio
+            
+            newSellSignal := true
+            signalEntry := entryPrice
+            signalSL := stopLoss
+            signalTP1 := takeProfit
+            signalTP2 := na
+            signalTP3 := na
+            signalReason := "Sign of Weakness"
+            lastSignalType := 'SELL'
+            wyckoffSignals := wyckoffSignals + 1
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         📦 FVG DETECTION & TRADING
+// ═══════════════════════════════════════════════════════════════════════════════
+if showIC and bar_index > 4
+    bool bull_fvg = low[1] > high[3]
+    bool bear_fvg = high[1] < low[3]
+    int right_idx = bar_index + 499
+    
+    if bull_fvg
+        float top_price = low[1]
+        float bottom_price = high[3]
+        box b = showVisual ? box.new(bar_index[2], top_price, right_idx, bottom_price, border_color=na, bgcolor=ic_color_fvg_bull, xloc=xloc.bar_index) : na
+        array.push(fvg_zones, FVG.new(b, true, top_price, bottom_price, bar_index[2]))
+    if bear_fvg
+        float top_price = low[3]
+        float bottom_price = high[1]
+        box b = showVisual ? box.new(bar_index[2], top_price, right_idx, bottom_price, border_color=na, bgcolor=ic_color_fvg_bear, xloc=xloc.bar_index) : na
+        array.push(fvg_zones, FVG.new(b, false, top_price, bottom_price, bar_index[2]))
+    
+    manage_fvg_zones(fvg_zones, ic_max_count)
+
+// FVG Fill Trading
+if useFvgSignals and strategy.position_size == 0 and not newBuySignal and not newSellSignal
+    int i = array.size(fvg_zones) - 1
+    while i >= 0
+        fvg = array.get(fvg_zones, i)
+        float zoneHigh = math.max(fvg.top, fvg.bottom)
+        float zoneLow = math.min(fvg.top, fvg.bottom)
+        bool closeInside = close <= zoneHigh and close >= zoneLow
+        bool oldEnough = bar_index > fvg.createdBarIndex + 1
+        
+        if oldEnough and closeInside and f_in_kz()
+            bool isLong = fvg.isBullish
+            float zoneRange = math.max(zoneHigh - zoneLow, syminfo.mintick)
+            float buffer = math.max(zoneRange * 0.25, syminfo.mintick)
+            float entryPrice = close
+            float stopLoss = isLong ? zoneLow - buffer : zoneHigh + buffer
+            float risk = math.abs(entryPrice - stopLoss)
+            float takeProfit = isLong ? entryPrice + risk * rr_ratio : entryPrice - risk * rr_ratio
+            
+            if (isLong and entryPrice > stopLoss) or (not isLong and entryPrice < stopLoss)
+                if isLong
+                    newBuySignal := true
+                else
+                    newSellSignal := true
+                signalEntry := entryPrice
+                signalSL := stopLoss
+                signalTP1 := takeProfit
+                signalTP2 := na
+                signalTP3 := na
+                signalReason := "FVG Fill"
+                lastSignalType := isLong ? 'BUY' : 'SELL'
+                smcSignals := smcSignals + 1
+                
+                // Remove used FVG
+                if not na(fvg.fvgBox)
+                    box.delete(fvg.fvgBox)
+                array.remove(fvg_zones, i)
+                break
+        i := i - 1
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         💹 STRATEGY ENTRIES
+// ═══════════════════════════════════════════════════════════════════════════════
+if newBuySignal and strategy.position_size == 0
+    float qty = f_calculate_qty(signalEntry, signalSL)
+    strategy.entry('L', strategy.long, qty=qty, alert_message='"reduceOnly": false')
+    
+    posLong := true
+    posShort := false
+    posEntry := signalEntry
+    posSL := signalSL
+    posTP1 := signalTP1
+    posTP2 := signalTP2
+    posTP3 := signalTP3
+    posTPstage := 0
+    
+    if enableAlerts and f_canAlert(true)
+        string msg = str.format("🟢 BUY {0}\n{1}\nEntry: {2}\nSL: {3}\nTP: {4}", syminfo.tickerid, signalReason, str.tostring(signalEntry, "#.#####"), str.tostring(signalSL, "#.#####"), str.tostring(signalTP1, "#.#####"))
+        alert(msg, alert.freq_once_per_bar_close)
+        lastBuyBar := bar_index
+    
+    if showVisual
+        label.new(bar_index, low, 'BUY', style=label.style_label_up, color=color.new(buyColor, 85), textcolor=buyColor, size=size.normal)
+        if showRR
+            int w = time + (time - time[1]) * 50
+            box.new(time, signalEntry, w, signalSL, border_color=na, bgcolor=riskColor, xloc=xloc.bar_time)
+            box.new(time, signalEntry, w, signalTP1, border_color=na, bgcolor=rewardColor, xloc=xloc.bar_time)
+
+if newSellSignal and strategy.position_size == 0
+    float qty = f_calculate_qty(signalEntry, signalSL)
+    strategy.entry('S', strategy.short, qty=qty, alert_message='"reduceOnly": false')
+    
+    posLong := false
+    posShort := true
+    posEntry := signalEntry
+    posSL := signalSL
+    posTP1 := signalTP1
+    posTP2 := signalTP2
+    posTP3 := signalTP3
+    posTPstage := 0
+    
+    if enableAlerts and f_canAlert(false)
+        string msg = str.format("🔴 SELL {0}\n{1}\nEntry: {2}\nSL: {3}\nTP: {4}", syminfo.tickerid, signalReason, str.tostring(signalEntry, "#.#####"), str.tostring(signalSL, "#.#####"), str.tostring(signalTP1, "#.#####"))
+        alert(msg, alert.freq_once_per_bar_close)
+        lastSellBar := bar_index
+    
+    if showVisual
+        label.new(bar_index, high, 'SELL', style=label.style_label_down, color=color.new(sellColor, 85), textcolor=sellColor, size=size.normal)
+        if showRR
+            int w = time + (time - time[1]) * 50
+            box.new(time, signalEntry, w, signalSL, border_color=na, bgcolor=riskColor, xloc=xloc.bar_time)
+            box.new(time, signalEntry, w, signalTP1, border_color=na, bgcolor=rewardColor, xloc=xloc.bar_time)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         📍 TP/SL MONITORING & EXITS
+// ═══════════════════════════════════════════════════════════════════════════════
+slDynamic = moveSLtoBE and slMovedToBE ? posEntry : posSL
+
+// TP1 hit
+if (posLong or posShort) and posTPstage < 1 and not na(posTP1)
+    bool hit1 = posLong ? (high >= posTP1) : (low <= posTP1)
+    if hit1
+        if moveSLtoBE and not slMovedToBE
+            posSL := posEntry
+            slMovedToBE := true
+        posTPstage := 1
+
+// Exit orders
+if strategy.position_size > 0 and not na(slDynamic)
+    float exitTP = not na(posTP3) ? posTP3 : (not na(posTP1) ? posTP1 : posEntry + atrValue * 2)
+    strategy.exit('L-Exit', from_entry='L', stop=slDynamic, limit=exitTP, alert_message='"reduceOnly": true')
+
+if strategy.position_size < 0 and not na(slDynamic)
+    float exitTP = not na(posTP3) ? posTP3 : (not na(posTP1) ? posTP1 : posEntry - atrValue * 2)
+    strategy.exit('S-Exit', from_entry='S', stop=slDynamic, limit=exitTP, alert_message='"reduceOnly": true')
+
+// Reset position state on close
+if strategy.position_size == 0 and (posLong or posShort)
+    posLong := false
+    posShort := false
+    posEntry := na
+    posSL := na
+    posTP1 := na
+    posTP2 := na
+    posTP3 := na
+    posTPstage := 0
+    slMovedToBE := false
+
+// Reset signals
+if barstate.isconfirmed
+    newBuySignal := false
+    newSellSignal := false
+    signalEntry := na
+    signalSL := na
+    signalTP1 := na
+    signalTP2 := na
+    signalTP3 := na
+    signalReason := na
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                    📊 PREMIUM DASHBOARD (Minimal & Elegant)
+// ═══════════════════════════════════════════════════════════════════════════════
+var dashboard = table.new(f_get_position(dashboardPosition), 2, compactDashboard ? 8 : 12, border_width=0, frame_width=0)
+
+if showDashboard and barstate.islast
+    // Colors
+    color bgMain = color.new(#0d1117, 5)
+    color bgCard = color.new(#161b22, 10)
+    color txtPrimary = color.new(#e6edf3, 0)
+    color txtSecondary = color.new(#8b949e, 0)
+    color accentGold = color.new(#d4a574, 0)
+    
+    // Trend colors
+    color ltfColor = ltf_trend == 1 ? C_BULL : ltf_trend == -1 ? C_BEAR : C_NEUTRAL
+    color modeColor = isTrending ? C_BULL : isRanging ? C_ACCENT_CYAN : C_NEUTRAL
+    color phaseColor = wyckoffPhase == "Accumulation" ? C_BULL : wyckoffPhase == "Distribution" ? C_BEAR : wyckoffPhase == "Markup" ? C_BULL : wyckoffPhase == "Markdown" ? C_BEAR : C_NEUTRAL
+    
+    // Position color
+    color posColor = strategy.position_size > 0 ? C_BULL : strategy.position_size < 0 ? C_BEAR : C_NEUTRAL
+    string posText = strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "—"
+    
+    // Session
+    string sessionText = na(active_session_name) ? "—" : active_session_name
+    color sessionColor = na(active_session_color) ? C_NEUTRAL : active_session_color
+    
+    // Header
+    table.cell(dashboard, 0, 0, '  WYCKOFF SMC PRO  ', text_size=size.small, text_halign=text.align_center, text_color=accentGold, bgcolor=bgMain)
+    table.merge_cells(dashboard, 0, 0, 1, 0)
+    
+    // Row 1: Wyckoff Phase
+    table.cell(dashboard, 0, 1, 'Phase', text_halign=text.align_left, text_color=txtSecondary, bgcolor=bgCard, text_size=size.tiny)
+    table.cell(dashboard, 1, 1, wyckoffPhase, text_halign=text.align_right, text_color=phaseColor, bgcolor=bgCard, text_size=size.tiny)
+    
+    // Row 2: LTF Trend
+    string trendText = ltf_trend == 1 ? "BULLISH" : ltf_trend == -1 ? "BEARISH" : "NEUTRAL"
+    table.cell(dashboard, 0, 2, 'LTF Trend', text_halign=text.align_left, text_color=txtSecondary, bgcolor=bgCard, text_size=size.tiny)
+    table.cell(dashboard, 1, 2, trendText, text_halign=text.align_right, text_color=ltfColor, bgcolor=bgCard, text_size=size.tiny)
+    
+    // Row 3: Market Mode
+    table.cell(dashboard, 0, 3, 'Mode', text_halign=text.align_left, text_color=txtSecondary, bgcolor=bgCard, text_size=size.tiny)
+    table.cell(dashboard, 1, 3, marketModeStr, text_halign=text.align_right, text_color=modeColor, bgcolor=bgCard, text_size=size.tiny)
+    
+    // Row 4: Volume
+    string volText = volRatio > 2 ? "CLIMAX" : volRatio > 1.5 ? "HIGH" : volRatio > 0.7 ? "NORMAL" : "LOW"
+    color volColor = volRatio > 2 ? accentGold : volRatio > 1.5 ? C_ACCENT_CYAN : volRatio > 0.7 ? txtSecondary : C_BEAR
+    table.cell(dashboard, 0, 4, 'Volume', text_halign=text.align_left, text_color=txtSecondary, bgcolor=bgCard, text_size=size.tiny)
+    table.cell(dashboard, 1, 4, volText, text_halign=text.align_right, text_color=volColor, bgcolor=bgCard, text_size=size.tiny)
+    
+    // Row 5: Kill Zone
+    table.cell(dashboard, 0, 5, 'Session', text_halign=text.align_left, text_color=txtSecondary, bgcolor=bgCard, text_size=size.tiny)
+    table.cell(dashboard, 1, 5, sessionText, text_halign=text.align_right, text_color=sessionColor, bgcolor=bgCard, text_size=size.tiny)
+    
+    // Row 6: Position
+    table.cell(dashboard, 0, 6, 'Position', text_halign=text.align_left, text_color=txtSecondary, bgcolor=bgCard, text_size=size.tiny)
+    table.cell(dashboard, 1, 6, posText, text_halign=text.align_right, text_color=posColor, bgcolor=bgCard, text_size=size.tiny)
+    
+    // Row 7: VWAP Delta
+    float vwapDelta = (close - dailyVwapValue) / dailyVwapValue * 100
+    color vwapColor = close > dailyVwapValue ? C_BULL : C_BEAR
+    table.cell(dashboard, 0, 7, 'VWAP Δ', text_halign=text.align_left, text_color=txtSecondary, bgcolor=bgCard, text_size=size.tiny)
+    table.cell(dashboard, 1, 7, str.tostring(vwapDelta, "#.##") + "%", text_halign=text.align_right, text_color=vwapColor, bgcolor=bgCard, text_size=size.tiny)
+    
+    if not compactDashboard
+        // Row 8: Spring/Upthrust status
+        string springStatus = springActive ? (springConfirmed ? "CONFIRMED" : "PENDING") : "—"
+        color springStatusColor = springConfirmed ? springColor : springActive ? C_ACCENT_ORANGE : txtSecondary
+        table.cell(dashboard, 0, 8, 'Spring', text_halign=text.align_left, text_color=txtSecondary, bgcolor=bgCard, text_size=size.tiny)
+        table.cell(dashboard, 1, 8, springStatus, text_halign=text.align_right, text_color=springStatusColor, bgcolor=bgCard, text_size=size.tiny)
+        
+        string utStatus = upthrustActive ? (upthrustConfirmed ? "CONFIRMED" : "PENDING") : "—"
+        color utStatusColor = upthrustConfirmed ? upthrustColor : upthrustActive ? C_ACCENT_ORANGE : txtSecondary
+        table.cell(dashboard, 0, 9, 'Upthrust', text_halign=text.align_left, text_color=txtSecondary, bgcolor=bgCard, text_size=size.tiny)
+        table.cell(dashboard, 1, 9, utStatus, text_halign=text.align_right, text_color=utStatusColor, bgcolor=bgCard, text_size=size.tiny)
+        
+        // Row 10: Support/Resistance
+        table.cell(dashboard, 0, 10, 'Support', text_halign=text.align_left, text_color=txtSecondary, bgcolor=bgCard, text_size=size.tiny)
+        table.cell(dashboard, 1, 10, str.tostring(supportLevel, "#.####"), text_halign=text.align_right, text_color=C_BULL, bgcolor=bgCard, text_size=size.tiny)
+        
+        table.cell(dashboard, 0, 11, 'Resistance', text_halign=text.align_left, text_color=txtSecondary, bgcolor=bgCard, text_size=size.tiny)
+        table.cell(dashboard, 1, 11, str.tostring(resistanceLevel, "#.####"), text_halign=text.align_right, text_color=C_BEAR, bgcolor=bgCard, text_size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                         🎨 WYCKOFF ZONE VISUALIZATION
+// ═══════════════════════════════════════════════════════════════════════════════
+// Draw accumulation/distribution range zones (subtle background)
+if showWyckoffZones and showVisual and isInRange
+    color zoneColor = inAccumulation ? accumulationColor : inDistribution ? distributionColor : na
+    bgcolor(zoneColor, 97)
