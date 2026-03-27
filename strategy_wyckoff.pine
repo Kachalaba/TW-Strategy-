@@ -124,6 +124,7 @@ group_kz = '⏰ Kill Zones (EST)'
 enableKzFilter = input.bool(true, 'Enable Kill Zone Filter', group=group_kz)
 showKzBackground = input.bool(true, 'Show Kill Zone Background', group=group_kz)
 kzOnly = input.bool(false, 'Trade Only in Kill Zones', group=group_kz)
+kzSession = input.session('0800-1100', 'Kill Zone Session', group=group_kz, tooltip='Формат: HHMM-HHMM по EST. По умолчанию NY AM.')
 kz_asia_color = input.color(color.new(#d29922, 92), 'Asia', group=group_kz, inline='kz1')
 kz_london_color = input.color(color.new(#a371f7, 92), 'London', group=group_kz, inline='kz1')
 kz_ny_am_color = input.color(color.new(#58a6ff, 92), 'NY AM', group=group_kz, inline='kz2')
@@ -403,7 +404,7 @@ f_get_position(string_pos) =>
         'Bottom Right' => position.bottom_right
         'Bottom Left' => position.bottom_left
 
-f_in_kz() => not kzOnly or not na(time(timeframe.period, '0800-1100'))
+f_in_kz() => not kzOnly or not na(time(timeframe.period, kzSession))
 
 f_calculate_qty(float entryPrice, float stopLoss) =>
     bool isHeavy = str.contains(syminfo.ticker, "BTC") or str.contains(syminfo.ticker, "ETH")

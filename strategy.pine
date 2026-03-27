@@ -87,6 +87,12 @@ filterByHtfZone = input.bool(false, 'Фильтровать по HTF Зоне', 
 // --- Частичные закрытия ---
 group_partial = 'Частичные закрытия'
 partialMode = input.string('TP3-only (0/0/100)', 'Режим частичных закрытий', options = ['TP3-only (0/0/100)', 'TP2/TP3 (0/30/70)', 'TP1/TP2/TP3 (33/50/100)'], group = group_partial)
+// --- Лимиты риска ---
+group_risk_limits = 'Лимиты Риска и Confluence'
+useDailyLossLimit    = input.bool(false, 'Дневной лимит убытков', group = group_risk_limits, tooltip = 'Блокирует новые сделки после N стопов за торговый день')
+dailyMaxSL           = input.int(3,   '   Макс. стопов в день', minval = 1, maxval = 20, group = group_risk_limits)
+useConfluenceBonus   = input.bool(false, 'Бонус размера: Wyckoff + SMC confluence', group = group_risk_limits, tooltip = 'Увеличивает размер позиции когда Wyckoff-фаза подтверждает SMC-сигнал')
+confluenceMult       = input.float(1.5, '   Множитель размера (confluence)', minval = 1.1, maxval = 3.0, step = 0.1, group = group_risk_limits)
 // --- Ликвидность ---
 group_liquidity = 'Анализ Ликвидности'
 showLiquidity = input.bool(true, 'Показывать Ликвидность (BSL/SSL)', group = group_liquidity)
@@ -343,10 +349,11 @@ var bool springConfirmed = false
 
 potentialSpring = low < supportLevel and close > supportLevel and isStoppingVolumeUp
 if potentialSpring and not springActive
-    lastSpringLow := low
-    lastSpringBar := bar_index
-    springActive := true
+    lastSpringLow   := low
+    lastSpringBar   := bar_index
+    springActive    := true
     springConfirmed := false
+    sosOccurred     := false  // новый Wyckoff-цикл — сброс SOS
 
 if springActive and not springConfirmed
     if bar_index - lastSpringBar >= springConfirmBars
@@ -587,6 +594,14 @@ varip int rawSwp = 0
 varip int passSwp = 0
 varip int rawTrd = 0
 varip int passTrd = 0
+// Win Rate / EV счётчики
+varip int  tpFinalHits = 0
+varip int  slTotalHits = 0
+varip float totalWinR   = 0.0   // суммарный R выигранных сделок
+varip float totalLossR  = 0.0   // суммарный R проигранных сделок
+// Daily Loss Limit
+varip int  dailySLcount = 0
+varip int  dailySLdate  = 0     // dayofmonth последнего сброса
 // =============== STRATEGY POSITION STATE ===============
 var bool posLong = false
 var bool posShort = false
@@ -638,8 +653,16 @@ allFiltersOK(bool isLongSignal, string context) =>
     bool kzOK = f_in_kz()
     // Trend Filter
     bool trendFilterOK = f_trend_ok(isLongSignal)
-    
-    vwapOK and trendOK and volumeOK and kzOK and trendFilterOK
+    // Session (Kill Zone context) — централизовано, больше не нужен ручной вызов перед allFiltersOK()
+    bool sessionOK = f_is_signal_allowed_by_session(context)
+
+    vwapOK and trendOK and volumeOK and kzOK and trendFilterOK and sessionOK
+// Сброс дневного счётчика стопов при смене дня
+if dayofmonth != dailySLdate
+    dailySLcount := 0
+    dailySLdate  := dayofmonth
+bool dailyLimitOK = not useDailyLossLimit or dailySLcount < dailyMaxSL
+
 // Chandelier trailing stop
 chandelierLongStopValue = ta.highest(high, trailStopLength) - ta.atr(14) * trailStopAtrMult
 chandelierShortStopValue = ta.lowest(low, trailStopLength) + ta.atr(14) * trailStopAtrMult
@@ -929,8 +952,7 @@ if showReversalSignals
                 rawRev := rawRev + 1
                 bool isHtfZoneOk = not filterByHtfZone or priceInHtfDemand
                 bool isTradeModeOk = tradingMode == 'Intraday' or tradingMode == 'Swing' and isMtfBullish
-                bool isSessionOk = f_is_signal_allowed_by_session('Reversal')
-                if isTradeModeOk and isHtfZoneOk and isSessionOk and allFiltersOK(true, 'Reversal')
+                if isTradeModeOk and isHtfZoneOk and allFiltersOK(true, 'Reversal')
                     passRev := passRev + 1
                     
                     // Подготовка сигнала
@@ -971,8 +993,7 @@ if showReversalSignals
                 rawRev := rawRev + 1
                 bool isHtfZoneOk = not filterByHtfZone or priceInHtfSupply
                 bool isTradeModeOk = tradingMode == 'Intraday' or tradingMode == 'Swing' and isMtfBearish
-                bool isSessionOk = f_is_signal_allowed_by_session('Reversal')
-                if isTradeModeOk and isHtfZoneOk and isSessionOk and allFiltersOK(false, 'Reversal')
+                if isTradeModeOk and isHtfZoneOk and allFiltersOK(false, 'Reversal')
                     passRev := passRev + 1
                     
                     // Подготовка сигнала
@@ -1029,8 +1050,7 @@ if showBreakEvents and array.size(ltf_breakPoints) > 0
                         if showSweepSignals
                             bool isHtfZoneOk = not filterByHtfZone or priceInHtfSupply
                             bool isTradeModeOk = tradingMode == 'Intraday' or tradingMode == 'Swing' and isMtfBearish
-                            bool isSessionOk = f_is_signal_allowed_by_session('Sweep')
-                            if isTradeModeOk and isHtfZoneOk and isSessionOk and allFiltersOK(false, 'Sweep')
+                            if isTradeModeOk and isHtfZoneOk and allFiltersOK(false, 'Sweep')
                                 passSwp := passSwp + 1
                                 
                                 // Подготовка сигнала
@@ -1075,8 +1095,7 @@ if showBreakEvents and array.size(ltf_breakPoints) > 0
                         if showSweepSignals
                             bool isHtfZoneOk = not filterByHtfZone or priceInHtfDemand
                             bool isTradeModeOk = tradingMode == 'Intraday' or tradingMode == 'Swing' and isMtfBullish
-                            bool isSessionOk = f_is_signal_allowed_by_session('Sweep')
-                            if isTradeModeOk and isHtfZoneOk and isSessionOk and allFiltersOK(true, 'Sweep')
+                            if isTradeModeOk and isHtfZoneOk and allFiltersOK(true, 'Sweep')
                                 passSwp := passSwp + 1
                                 
                                 // Подготовка сигнала
@@ -1132,8 +1151,7 @@ if showTrendSignals and not na(ltf_trend_signal_box)
         bool htfContext = isLong ? priceInHtfDemand : priceInHtfSupply
         bool isHtfZoneOk = not filterByHtfZone or htfContext
         bool isTradeModeOk = tradingMode == 'Intraday' or tradingMode == 'Swing' and (isLong ? isMtfBullish : isMtfBearish)
-        bool isSessionOk = f_is_signal_allowed_by_session('Trend')
-        if isTradeModeOk and isHtfZoneOk and isSessionOk and allFiltersOK(isLong, 'Trend')
+        if isTradeModeOk and isHtfZoneOk and allFiltersOK(isLong, 'Trend')
             passTrd := passTrd + 1
             float entryPrice = isLong ? math.min(open, top) : math.max(open, bottom)
             
@@ -1199,13 +1217,12 @@ if needFvgProcessing and bar_index > 4
             bool removeZone = false
 
             if oldEnough and sizeOk and priceTouched
-                bool sessionOk = f_is_signal_allowed_by_session('FVG')
                 bool inHtfZoneLong = not filterByHtfZone or priceInHtfDemand
                 bool inHtfZoneShort = not filterByHtfZone or priceInHtfSupply
                 bool tradeModeLongOk = tradingMode == 'Intraday' or (tradingMode == 'Swing' and isMtfBullish)
                 bool tradeModeShortOk = tradingMode == 'Intraday' or (tradingMode == 'Swing' and isMtfBearish)
 
-                if useInversionFvg and inversionBreak and strategy.position_size == 0 and sessionOk
+                if useInversionFvg and inversionBreak and strategy.position_size == 0
                     bool isLong = not fvg.isBullish
                     bool htfOk = isLong ? inHtfZoneLong : inHtfZoneShort
                     bool tradeModeOk = isLong ? tradeModeLongOk : tradeModeShortOk
@@ -1237,7 +1254,7 @@ if needFvgProcessing and bar_index > 4
                                 f_register_fvg_marker(ifvg_labels, f_fvg_mid(fvg), 'IFVG', isLong ? buyColor : sellColor, isLong)
                         removeZone := true
 
-                if not removeZone and useFvgSignals and closeInside and strategy.position_size == 0 and sessionOk
+                if not removeZone and useFvgSignals and closeInside and strategy.position_size == 0
                     bool isLong = fvg.isBullish
                     bool htfOk = isLong ? inHtfZoneLong : inHtfZoneShort
                     bool tradeModeOk = isLong ? tradeModeLongOk : tradeModeShortOk
@@ -1376,8 +1393,10 @@ if useWyckoff and strategy.position_size == 0 and not newBuySignal and not newSe
             signalTP1 := takeProfit
             signalTP2 := entryPrice + risk * rr_ratio * 1.5
             signalTP3 := entryPrice + risk * rr_ratio * 2.0
-            signalReason := "Wyckoff Spring"
-            lastSignalType := 'BUY'
+            signalReason    := 'Wyckoff Spring'
+            lastSignalType  := 'BUY'
+            springActive    := false   // предотвращает повторный вход до нового потенциального Spring
+            springConfirmed := false
             if showVisual
                 label.new(bar_index, low, 'BUY', style=label.style_label_up, color=color(na), textcolor=buyColor, size=size.large)
     
@@ -1396,8 +1415,10 @@ if useWyckoff and strategy.position_size == 0 and not newBuySignal and not newSe
             signalTP1 := takeProfit
             signalTP2 := entryPrice - risk * rr_ratio * 1.5
             signalTP3 := entryPrice - risk * rr_ratio * 2.0
-            signalReason := "Wyckoff Upthrust"
-            lastSignalType := 'SELL'
+            signalReason      := 'Wyckoff Upthrust'
+            lastSignalType    := 'SELL'
+            upthrustActive    := false   // предотвращает повторный вход до нового Upthrust
+            upthrustConfirmed := false
             if showVisual
                 label.new(bar_index, high, 'SELL', style=label.style_label_down, color=color(na), textcolor=sellColor, size=size.large)
     
@@ -1441,6 +1462,14 @@ if useWyckoff and strategy.position_size == 0 and not newBuySignal and not newSe
             if showVisual
                 label.new(bar_index, high, 'SELL', style=label.style_label_down, color=color(na), textcolor=sellColor, size=size.large)
 
+// =============== CONFLUENCE DETECTION ===============
+// Wyckoff-фаза подтверждает SMC-сигнал — используется для увеличения размера позиции
+bool signalIsWyckoff = signalReason == 'Wyckoff Spring' or signalReason == 'Wyckoff Upthrust' or signalReason == 'Sign of Strength' or signalReason == 'Sign of Weakness'
+bool wyckoffBullCtx  = inAccumulation or springConfirmed
+bool wyckoffBearCtx  = inDistribution or upthrustConfirmed
+bool signalConfluence = useConfluenceBonus and not signalIsWyckoff and
+     ((newBuySignal and wyckoffBullCtx) or (newSellSignal and wyckoffBearCtx))
+
 // =============== TP/SL MONITORING ===============
 f_level_hit_up(lvl) => strictMode ? (high[1] < lvl and high >= lvl) : (high >= lvl)
 f_level_hit_down(lvl) => strictMode ? (low[1] > lvl and low <= lvl) : (low <= lvl)
@@ -1469,6 +1498,11 @@ if (posLong or posShort) and posTPstage < 3 and not na(posTP3)
     if hit3
         tp3Hit := true
         posTPstage := 3
+        // Win Rate: считаем только TP3 (финальный выход) как "выигрыш"
+        tpFinalHits := tpFinalHits + 1
+        if not na(posTP3) and not na(posEntry) and not na(posSL)
+            float riskSz = math.max(math.abs(posEntry - posSL), syminfo.mintick)
+            totalWinR := totalWinR + math.abs(posTP3 - posEntry) / riskSz
         if alertOnTPs and enableAlerts
             alert('TP3 reached on ' + syminfo.ticker, alert.freq_once_per_bar_close)
         // Сброс позиции после финального TP
@@ -1489,6 +1523,12 @@ slDynamic = moveSLtoBE and slMovedToBE ? posEntry : posSL
 if (posLong or posShort) and not na(slDynamic)
     bool stopHit = posLong ? f_level_hit_down(slDynamic) : f_level_hit_up(slDynamic)
     if stopHit
+        // Win Rate + Daily Limit
+        slTotalHits  := slTotalHits + 1
+        dailySLcount := dailySLcount + 1
+        if not na(posEntry) and not na(slDynamic)
+            float riskSz = math.max(math.abs(posEntry - posSL), syminfo.mintick)
+            totalLossR := totalLossR + math.abs(slDynamic - posEntry) / riskSz
         if alertOnSL and enableAlerts
             alert('SL reached on ' + syminfo.ticker, alert.freq_once_per_bar_close)
         // Сброс состояния позиции
@@ -1529,7 +1569,7 @@ f_get_nearest_htf_demand() =>
                 float bottom = box.get_bottom(bx)
                 txt := str.tostring(top, '#.#####') + ' - ' + str.tostring(bottom, '#.#####')
     txt
-var dashboard = table.new(f_get_position(dashboardPosition), 2, 16, border_width = 1)
+var dashboard = table.new(f_get_position(dashboardPosition), 2, 22, border_width = 1)
 if showDashboard and barstate.islast
     string htf_trend_label = 'Тренд HTF (' + mtf_timeframe + ')'
     string htf_trend_text = mtf_swing_direction == 1 ? 'БЫЧИЙ' : mtf_swing_direction == -1 ? 'МЕДВЕЖИЙ' : 'НЕЙТРАЛЬНЫЙ'
@@ -1611,10 +1651,50 @@ if showDashboard and barstate.islast
     color ut_status_color = upthrustConfirmed ? color.new(upthrustColor, 70) : upthrustActive ? color.new(color.orange, 70) : color.new(color.gray, 70)
     table.cell(dashboard, 0, 15, '🔴 Upthrust', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
     table.cell(dashboard, 1, 15, ut_status, text_halign = text.align_right, text_color = c_text, bgcolor = ut_status_color)
+    // ── Win Rate & Expected Value ─────────────────────────────────────────────
+    int totalTrades = tpFinalHits + slTotalHits
+    float winRate   = totalTrades > 0 ? tpFinalHits / totalTrades * 100.0 : na
+    float avgWinR   = tpFinalHits  > 0 ? totalWinR  / tpFinalHits  : na
+    float avgLossR  = slTotalHits  > 0 ? totalLossR / slTotalHits  : na
+    float ev        = not na(winRate) and not na(avgWinR) and not na(avgLossR) ?
+         (winRate / 100.0 * avgWinR) - ((1.0 - winRate / 100.0) * avgLossR) : na
+    string wr_text  = na(winRate) ? '—' :
+         str.tostring(winRate, '#.#') + '%  (' + str.tostring(tpFinalHits) + '/' + str.tostring(totalTrades) + ')'
+    color  wr_color = na(winRate) ? c_bg : winRate >= 50 ? color.new(color.green, 70) : color.new(color.red, 70)
+    string ev_text  = na(ev) ? '—' : (ev >= 0 ? '+' : '') + str.tostring(ev, '#.##') + 'R'
+    color  ev_color = na(ev) ? c_bg : ev >= 0 ? color.new(color.green, 70) : color.new(color.red, 70)
+    table.cell(dashboard, 0, 16, '📊 Win Rate (TP3)', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 16, wr_text, text_halign = text.align_right, text_color = c_text, bgcolor = wr_color)
+    table.cell(dashboard, 0, 17, '⚡ Exp. Value (EV)', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 17, ev_text, text_halign = text.align_right, text_color = c_text, bgcolor = ev_color)
+    // ── Daily Loss Limit ──────────────────────────────────────────────────────
+    string dl_text  = not useDailyLossLimit ? 'OFF' :
+         str.tostring(dailySLcount) + '/' + str.tostring(dailyMaxSL) + ' SL сегодня'
+    color  dl_color = not useDailyLossLimit ? c_bg :
+         dailySLcount >= dailyMaxSL ? color.new(color.red, 50) :
+         dailySLcount >= dailyMaxSL - 1 ? color.new(color.orange, 60) : color.new(color.green, 70)
+    table.cell(dashboard, 0, 18, '🛡 Daily Limit', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 18, dl_text, text_halign = text.align_right, text_color = c_text, bgcolor = dl_color)
+    // ── Session Breakdown ─────────────────────────────────────────────────────
+    table.cell(dashboard, 0, 19, '─ Сессия / Сигналы ─', text_halign = text.align_center, text_color = c_lbl, bgcolor = c_bg)
+    table.merge_cells(dashboard, 0, 19, 1, 19)
+    table.cell(dashboard, 0, 20, 'Asia / London / NYa / NYp', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 20,
+         str.tostring(asia_signal_count) + ' / ' +
+         str.tostring(london_signal_count) + ' / ' +
+         str.tostring(ny_am_signal_count) + ' / ' +
+         str.tostring(ny_pm_signal_count),
+         text_halign = text.align_right, text_color = c_text, bgcolor = c_bg)
+    // Confluence bonus indicator
+    string conf_text = not useConfluenceBonus ? 'OFF' : signalConfluence ? '✓ ACTIVE ×' + str.tostring(confluenceMult, '#.#') : '—'
+    color  conf_color = signalConfluence ? color.new(color.yellow, 60) : c_bg
+    table.cell(dashboard, 0, 21, '🔗 Confluence ×', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 21, conf_text, text_halign = text.align_right, text_color = c_text, bgcolor = conf_color)
 // =============== СТРАТЕГИЧЕСКИЕ ЗАЯВКИ (В КОНЦЕ!) ===============
 // ENTRY ORDERS (только если нет позиции)
-if newBuySignal and strategy.position_size == 0
-    float qty = f_calculate_qty(signalEntry, signalSL)
+if newBuySignal and strategy.position_size == 0 and dailyLimitOK
+    float confMult = signalConfluence ? confluenceMult : 1.0
+    float qty = f_calculate_qty(signalEntry, signalSL) * confMult
     strategy.entry('L', strategy.long, qty = qty, alert_message = '"reduceOnly": false')
     
     // Сохраняем состояние позиции
@@ -1644,8 +1724,9 @@ if newBuySignal and strategy.position_size == 0
         int w = time + (time - time[1]) * 60
         box.new(time, signalEntry, w, signalSL, border_color = na, bgcolor = riskColor, xloc = xloc.bar_time)
         box.new(time, signalEntry, w, signalTP1, border_color = na, bgcolor = rewardColor, xloc = xloc.bar_time)
-if newSellSignal and strategy.position_size == 0
-    float qty = f_calculate_qty(signalEntry, signalSL)
+if newSellSignal and strategy.position_size == 0 and dailyLimitOK
+    float confMult = signalConfluence ? confluenceMult : 1.0
+    float qty = f_calculate_qty(signalEntry, signalSL) * confMult
     strategy.entry('S', strategy.short, qty = qty, alert_message = '"reduceOnly": false')
     
     // Сохраняем состояние позиции
