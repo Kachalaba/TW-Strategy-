@@ -201,10 +201,10 @@ alertOnSL = input.bool(true, 'Alert on SL Hit', group=group_alerts)
 // ═══════════════════════════════════════════════════════════════════════════════
 import TradingView/ZigZag/7 as zigzag
 
-float level_1_start = 1.272
-float level_1_end = 1.618
-float level_2_start = -1.272
-float level_2_end = -1.618
+const float level_1_start = 1.272
+const float level_1_end   = 1.618
+const float level_2_start = -1.272
+const float level_2_end   = -1.618
 
 type BreakPoint
     float price
@@ -229,8 +229,18 @@ type WyckoffZone
     string phase
     bool confirmed
 
-const int FVG_MARKER_LIMIT = 30
+const int FVG_MARKER_LIMIT   = 30
 const int WYCKOFF_ZONE_LIMIT = 5
+
+// ─── VSA пороговые константы ──────────────────────────────────────────────────
+const float VSA_CLOSE_UPPER    = 0.66
+const float VSA_CLOSE_LOWER    = 0.33
+const float VSA_CLIMAX_SPR     = 1.5
+const float VSA_STOPPING_SPR   = 1.2
+const float VSA_NO_DEMAND_VOL  = 0.7
+const float VSA_NO_DEMAND_SPR  = 0.8
+const float VSA_TEST_VOL       = 0.5
+const float VSA_TEST_SPR       = 0.7
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                         📈 WYCKOFF VSA CALCULATIONS
@@ -247,9 +257,9 @@ spreadRatio = spread / avgSpread
 
 // Close Position within bar
 closePos = spread > 0 ? (close - low) / spread : 0.5
-isCloseUpper = closePos > 0.66
-isCloseMid = closePos >= 0.33 and closePos <= 0.66
-isCloseLower = closePos < 0.33
+isCloseUpper = closePos > VSA_CLOSE_UPPER
+isCloseMid   = closePos >= VSA_CLOSE_LOWER and closePos <= VSA_CLOSE_UPPER
+isCloseLower = closePos < VSA_CLOSE_LOWER
 
 // Body Analysis
 body = math.abs(close - open)
@@ -262,27 +272,27 @@ isBearishBar = close < open
 //                         🔍 VSA PATTERN DETECTION
 // ═══════════════════════════════════════════════════════════════════════════════
 // Climax Volume (potential reversal)
-isClimaxVolume = volRatio >= wyckoffVolMult and spreadRatio > 1.5
-isClimaxUp = isClimaxVolume and isBullishBar and isCloseUpper
-isClimaxDown = isClimaxVolume and isBearishBar and isCloseLower
+isClimaxVolume    = volRatio >= wyckoffVolMult and spreadRatio > VSA_CLIMAX_SPR
+isClimaxUp        = isClimaxVolume and isBullishBar and isCloseUpper
+isClimaxDown      = isClimaxVolume and isBearishBar and isCloseLower
 
 // Stopping Volume (absorption)
-isStoppingVolume = volRatio >= wyckoffVolMult and spreadRatio > 1.2
-isStoppingVolumeUp = isStoppingVolume and isCloseUpper and low < low[1]
+isStoppingVolume     = volRatio >= wyckoffVolMult and spreadRatio > VSA_STOPPING_SPR
+isStoppingVolumeUp   = isStoppingVolume and isCloseUpper and low < low[1]
 isStoppingVolumeDown = isStoppingVolume and isCloseLower and high > high[1]
 
 // No Demand (weak rally, expecting down)
-isNoDemand = volRatio < 0.7 and spreadRatio < 0.8 and isBullishBar and isCloseMid
+isNoDemand = volRatio < VSA_NO_DEMAND_VOL and spreadRatio < VSA_NO_DEMAND_SPR and isBullishBar and isCloseMid
 
-// No Supply (weak decline, expecting up)  
-isNoSupply = volRatio < 0.7 and spreadRatio < 0.8 and isBearishBar and isCloseMid
+// No Supply (weak decline, expecting up)
+isNoSupply = volRatio < VSA_NO_DEMAND_VOL and spreadRatio < VSA_NO_DEMAND_SPR and isBearishBar and isCloseMid
 
 // Test Bar (low volume retest)
-isTestBar = volRatio < 0.5 and spreadRatio < 0.7
+isTestBar = volRatio < VSA_TEST_VOL and spreadRatio < VSA_TEST_SPR
 
 // Effort vs Result (divergence)
-effortUp = isBullishBar and volRatio > 1.5 and spreadRatio < 0.7
-effortDown = isBearishBar and volRatio > 1.5 and spreadRatio < 0.7
+effortUp   = isBullishBar and volRatio > 1.5 and spreadRatio < VSA_TEST_SPR
+effortDown = isBearishBar and volRatio > 1.5 and spreadRatio < VSA_TEST_SPR
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                         📊 WYCKOFF PHASE DETECTION
