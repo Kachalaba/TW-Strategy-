@@ -21,8 +21,7 @@ minNotionalDefault = input.float(5.0, 'Min notional (alts), $', minval = 1.0, gr
 minNotionalHeavy = input.float(100.0, 'Min notional (BTC/ETH), $', minval = 10.0, group = group_risk)
 // Хелпер для совместимости: можно дергать при детекции сетапов
 f_can_detect() =>
-    // если включено — не блокируем детекцию сетапов наличием позиции
-    detectEvenIfInPosition or strategy.position_size == 0 ? true : true
+    detectEvenIfInPosition or strategy.position_size == 0
 // --- TREND FILTER ---
 group_trend = 'Trend Filter'
 useTrendFilter = input.bool(false, 'Включить фильтр по тренду', group = group_trend)
@@ -88,6 +87,12 @@ filterByHtfZone = input.bool(false, 'Фильтровать по HTF Зоне', 
 // --- Частичные закрытия ---
 group_partial = 'Частичные закрытия'
 partialMode = input.string('TP3-only (0/0/100)', 'Режим частичных закрытий', options = ['TP3-only (0/0/100)', 'TP2/TP3 (0/30/70)', 'TP1/TP2/TP3 (33/50/100)'], group = group_partial)
+// --- Лимиты риска ---
+group_risk_limits = 'Лимиты Риска и Confluence'
+useDailyLossLimit    = input.bool(false, 'Дневной лимит убытков', group = group_risk_limits, tooltip = 'Блокирует новые сделки после N стопов за торговый день')
+dailyMaxSL           = input.int(3,   '   Макс. стопов в день', minval = 1, maxval = 20, group = group_risk_limits)
+useConfluenceBonus   = input.bool(false, 'Бонус размера: Wyckoff + SMC confluence', group = group_risk_limits, tooltip = 'Увеличивает размер позиции когда Wyckoff-фаза подтверждает SMC-сигнал')
+confluenceMult       = input.float(1.5, '   Множитель размера (confluence)', minval = 1.1, maxval = 3.0, step = 0.1, group = group_risk_limits)
 // --- Ликвидность ---
 group_liquidity = 'Анализ Ликвидности'
 showLiquidity = input.bool(true, 'Показывать Ликвидность (BSL/SSL)', group = group_liquidity)
@@ -184,12 +189,17 @@ sourceType = input.string('Wicks (High/Low)', 'Источник для расч�
 group_ltf = 'Настройки Локального Таймфрейма (LTF)'
 ltf_threshold_multiplier = input.float(3.0, 'LTF Deviation %', minval = 0, group = group_ltf, tooltip = 'Отклонение в % для ZigZag')
 ltf_depth = input.int(10, 'LTF Depth', minval = 2, group = group_ltf)
-// --- Блоки ---
-group_block1 = 'Настройки Разворотного Блока'
-fillColBull_1 = input.color(color.new(color.red, 85), 'Заливка Блока (Разворот)', group = group_block1)
-group_block2 = 'Настройки Целевого Блока (Take Profit)'
-showTargetBlock = input.bool(true, 'Показывать Целевой Блок', group = group_block2)
-fillColBull_2 = input.color(color.new(color.green, 85), 'Заливка Блока (Цель)', group = group_block2)
+// --- Fibonacci Zones ---
+group_fib = 'Fibonacci Zones'
+useFibZoneFilter = input.bool(false, 'Фильтр: вход только в Golden Pocket', group = group_fib, tooltip = 'Сигнал открывается только если цена внутри зоны 0.618–0.786 ретрейсмента последнего свинга (Golden Pocket)')
+showFibZones     = input.bool(true,  'Показывать Фибо-зоны на графике', group = group_fib)
+showTargetBlock  = input.bool(true,  'Показывать зону расширения (TP)', group = group_fib)
+fibRetraceNear   = input.float(0.618, 'Golden Pocket — ближний уровень', minval = 0.1, maxval = 0.99, step = 0.001, group = group_fib)
+fibRetraceFar    = input.float(0.786, 'Golden Pocket — дальний уровень', minval = 0.1, maxval = 0.99, step = 0.001, group = group_fib)
+fibExt1          = input.float(1.272, 'Расширение (нижняя граница зоны TP)', minval = 1.001, step = 0.001, group = group_fib)
+fibExt2          = input.float(1.618, 'Расширение (верхняя граница зоны TP)', minval = 1.001, step = 0.001, group = group_fib)
+fibGoldenColor   = input.color(color.new(#FFD700, 78), 'Цвет Golden Pocket', group = group_fib)
+fibExtColor      = input.color(color.new(#00BCD4, 85), 'Цвет зоны расширения', group = group_fib)
 // --- MTF ---
 group_mtf = 'Настройки Multi-Timeframe (MTF)'
 mtf_enabled = input.bool(true, 'Включить MTF Анализ', group = group_mtf)
@@ -198,8 +208,6 @@ mtf_depth = input.int(10, 'MTF Pivot Depth', minval = 2, group = group_mtf)
 mtf_min_swing_percent = input.float(1.0, 'MTF Min. Swing %', minval = 0, step = 0.1, group = group_mtf)
 mtf_bosColor = input.color(color.new(#00BCD4, 0), '   Цвет MTF Пробоя', group = group_mtf)
 mtf_sweepColor = input.color(color.new(#FF69B4, 0), '   Цвет MTF Свипа ($)', group = group_mtf)
-mtf_fillColBull_1 = input.color(color.new(color.red, 92), '   Заливка MTF Блока (Разворот)', group = group_mtf)
-mtf_fillColBull_2 = input.color(color.new(color.green, 92), '   Заливка MTF Блока (Цель)', group = group_mtf)
 // --- Оптимизация/Стабильность ---
 group_optimization = 'Оптимизация Продуктивности'
 history_depth = input.int(200, 'Глибина Аналізу (барів)', minval = 50, group = group_optimization)
@@ -245,10 +253,6 @@ testColor = input.color(color.new(#58a6ff, 0), 'Test Bar', group=group_wyckoff_s
 
 // =============== LIBS & CONST ===============
 import TradingView/ZigZag/7 as zigzag
-float level_1_start = 1.272
-float level_1_end = 1.618
-float level_2_start = -1.272
-float level_2_end = -1.618
 // =============== TYPES ===============
 type BreakPoint
     float price
@@ -269,6 +273,16 @@ type FVG
     int createdBarIndex
 const int FVG_MARKER_LIMIT = 30
 
+// ─── VSA пороговые константы ──────────────────────────────────────────────────
+const float VSA_CLOSE_UPPER    = 0.66  // закрытие в верхней трети бара
+const float VSA_CLOSE_LOWER    = 0.33  // закрытие в нижней трети бара
+const float VSA_CLIMAX_SPR     = 1.5   // мин. spread ratio для Climax Volume
+const float VSA_STOPPING_SPR   = 1.2   // мин. spread ratio для Stopping Volume
+const float VSA_NO_DEMAND_VOL  = 0.7   // макс. vol ratio для No Demand/Supply
+const float VSA_NO_DEMAND_SPR  = 0.8   // макс. spread ratio для No Demand/Supply
+const float VSA_TEST_VOL       = 0.5   // макс. vol ratio для Test Bar
+const float VSA_TEST_SPR       = 0.7   // макс. spread ratio для Test Bar
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //                         📈 WYCKOFF VSA CALCULATIONS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -283,9 +297,9 @@ spreadRatio = wyckoffSpread / avgSpread
 
 // Close Position within bar
 closePos = wyckoffSpread > 0 ? (close - low) / wyckoffSpread : 0.5
-isCloseUpper = closePos > 0.66
-isCloseMid = closePos >= 0.33 and closePos <= 0.66
-isCloseLower = closePos < 0.33
+isCloseUpper = closePos > VSA_CLOSE_UPPER
+isCloseMid   = closePos >= VSA_CLOSE_LOWER and closePos <= VSA_CLOSE_UPPER
+isCloseLower = closePos < VSA_CLOSE_LOWER
 
 // Body Analysis
 isBullishBar = close > open
@@ -295,23 +309,23 @@ isBearishBar = close < open
 //                         🔍 VSA PATTERN DETECTION
 // ═══════════════════════════════════════════════════════════════════════════════
 // Climax Volume (potential reversal)
-isClimaxVolume = volRatio >= wyckoffVolMult and spreadRatio > 1.5
-isClimaxUp = isClimaxVolume and isBullishBar and isCloseUpper
-isClimaxDown = isClimaxVolume and isBearishBar and isCloseLower
+isClimaxVolume    = volRatio >= wyckoffVolMult and spreadRatio > VSA_CLIMAX_SPR
+isClimaxUp        = isClimaxVolume and isBullishBar and isCloseUpper
+isClimaxDown      = isClimaxVolume and isBearishBar and isCloseLower
 
 // Stopping Volume (absorption)
-isStoppingVolume = volRatio >= wyckoffVolMult and spreadRatio > 1.2
-isStoppingVolumeUp = isStoppingVolume and isCloseUpper and low < low[1]
+isStoppingVolume     = volRatio >= wyckoffVolMult and spreadRatio > VSA_STOPPING_SPR
+isStoppingVolumeUp   = isStoppingVolume and isCloseUpper and low < low[1]
 isStoppingVolumeDown = isStoppingVolume and isCloseLower and high > high[1]
 
 // No Demand (weak rally)
-isNoDemand = volRatio < 0.7 and spreadRatio < 0.8 and isBullishBar and isCloseMid
+isNoDemand = volRatio < VSA_NO_DEMAND_VOL and spreadRatio < VSA_NO_DEMAND_SPR and isBullishBar and isCloseMid
 
-// No Supply (weak decline)  
-isNoSupply = volRatio < 0.7 and spreadRatio < 0.8 and isBearishBar and isCloseMid
+// No Supply (weak decline)
+isNoSupply = volRatio < VSA_NO_DEMAND_VOL and spreadRatio < VSA_NO_DEMAND_SPR and isBearishBar and isCloseMid
 
 // Test Bar (low volume retest)
-isTestBar = volRatio < 0.5 and spreadRatio < 0.7
+isTestBar = volRatio < VSA_TEST_VOL and spreadRatio < VSA_TEST_SPR
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                         📊 WYCKOFF PHASE DETECTION
@@ -334,10 +348,11 @@ var bool springConfirmed = false
 
 potentialSpring = low < supportLevel and close > supportLevel and isStoppingVolumeUp
 if potentialSpring and not springActive
-    lastSpringLow := low
-    lastSpringBar := bar_index
-    springActive := true
+    lastSpringLow   := low
+    lastSpringBar   := bar_index
+    springActive    := true
     springConfirmed := false
+    sosOccurred     := false  // новый Wyckoff-цикл — сброс SOS
 
 if springActive and not springConfirmed
     if bar_index - lastSpringBar >= springConfirmBars
@@ -578,6 +593,14 @@ varip int rawSwp = 0
 varip int passSwp = 0
 varip int rawTrd = 0
 varip int passTrd = 0
+// Win Rate / EV счётчики
+varip int  tpFinalHits = 0
+varip int  slTotalHits = 0
+varip float totalWinR   = 0.0   // суммарный R выигранных сделок
+varip float totalLossR  = 0.0   // суммарный R проигранных сделок
+// Daily Loss Limit
+varip int  dailySLcount = 0
+varip int  dailySLdate  = 0     // dayofmonth последнего сброса
 // =============== STRATEGY POSITION STATE ===============
 var bool posLong = false
 var bool posShort = false
@@ -612,6 +635,18 @@ passVolatility = not useScanner or atrPct > minAtrPct and not na(atrPct)
 passScanner = passLiquidity and passVolatility
 f_canAlert(bool isLong) =>
     isLong ? bar_index - lastBuyBar > cooldownBars : bar_index - lastSellBar > cooldownBars
+// =============== FIBONACCI ZONE FILTER ===============
+// Проверяет, находится ли текущий close внутри Golden Pocket (fibBoxes1) последнего свинга.
+// Если фильтр выключен или ящиков ещё нет — пропускает всё.
+f_price_in_fib_zone(bool isLong) =>
+    if not useFibZoneFilter or array.size(ltf_fibBoxes1) == 0
+        true
+    else
+        box lastBox  = array.get(ltf_fibBoxes1, array.size(ltf_fibBoxes1) - 1)
+        float top    = box.get_top(lastBox)
+        float bottom = box.get_bottom(lastBox)
+        close >= bottom and close <= top
+
 allFiltersOK(bool isLongSignal, string context) =>
     // VWAP
     bool vwapOK = true
@@ -629,8 +664,18 @@ allFiltersOK(bool isLongSignal, string context) =>
     bool kzOK = f_in_kz()
     // Trend Filter
     bool trendFilterOK = f_trend_ok(isLongSignal)
-    
-    vwapOK and trendOK and volumeOK and kzOK and trendFilterOK
+    // Session (Kill Zone context) — централизовано, больше не нужен ручной вызов перед allFiltersOK()
+    bool sessionOK = f_is_signal_allowed_by_session(context)
+    // Fibonacci Golden Pocket filter
+    bool fibZoneOK = f_price_in_fib_zone(isLongSignal)
+
+    vwapOK and trendOK and volumeOK and kzOK and trendFilterOK and sessionOK and fibZoneOK
+// Сброс дневного счётчика стопов при смене дня
+if dayofmonth != dailySLdate
+    dailySLcount := 0
+    dailySLdate  := dayofmonth
+bool dailyLimitOK = not useDailyLossLimit or dailySLcount < dailyMaxSL
+
 // Chandelier trailing stop
 chandelierLongStopValue = ta.highest(high, trailStopLength) - ta.atr(14) * trailStopAtrMult
 chandelierShortStopValue = ta.lowest(low, trailStopLength) + ta.atr(14) * trailStopAtrMult
@@ -719,21 +764,58 @@ f_pick_tp_conditional(bool isLong, float entry, float stop, string p1, string p2
     if na(chosen)
         chosen := isLong ? entry + risk*rr_fix : entry - risk*rr_fix
     round_tick(chosen)
-draw_fib_blocks(float startPrice, int startTime, float endPrice, int endTime, color reversalColor, color targetColor, array<box> boxArray1, array<box> boxArray2, int max_size) =>
-    int dir = endPrice > startPrice ? 1 : -1
-    float h = math.abs(startPrice - endPrice)
-    if showVisual
-        float b1 = dir == 1 ? endPrice + h * (level_1_start - 1) : endPrice - h * (level_1_start - 1)
-        float b2 = dir == 1 ? endPrice + h * (level_1_end - 1) : endPrice - h * (level_1_end - 1)
-        box bx1 = box.new(startTime, math.max(b1, b2), time, math.min(b1, b2), xloc = xloc.bar_time, bgcolor = reversalColor, border_color = na, extend = extend.right)
+// draw_fib_blocks — рисует Golden Pocket (0.618–0.786 ретрейсмент) и зону расширения (fibExt1–fibExt2).
+// boxArray1 = Golden Pocket (зона входа), boxArray2 = Extension (зона TP).
+// dir=1: bullish swing (startPrice→endPrice движение вверх).
+// Golden Pocket: цена откатывается от endPrice на 61.8–78.6% высоты свинга.
+// Extension: цена уходит за endPrice на (fibExt1-1)–(fibExt2-1) * h.
+draw_fib_blocks(float startPrice, int startTime, float endPrice, int endTime, array<box> boxArray1, array<box> boxArray2, int max_size) =>
+    int dir   = endPrice > startPrice ? 1 : -1
+    float h   = math.abs(endPrice - startPrice)
+    if showVisual and showFibZones
+        // Golden Pocket: ретрейсмент 0.618–0.786
+        float gp_near = dir == 1 ? endPrice - h * fibRetraceNear : endPrice + h * fibRetraceNear
+        float gp_far  = dir == 1 ? endPrice - h * fibRetraceFar  : endPrice + h * fibRetraceFar
+        box bx1 = box.new(startTime, math.max(gp_near, gp_far), time, math.min(gp_near, gp_far),
+                          xloc = xloc.bar_time, bgcolor = fibGoldenColor,
+                          border_color = color.new(#FFD700, 30), extend = extend.right)
         array.push(boxArray1, bx1)
         manage_array_of_boxes(boxArray1, max_size)
         if showTargetBlock
-            float t1 = dir == 1 ? endPrice - h * math.abs(level_2_start) : endPrice + h * math.abs(level_2_start)
-            float t2 = dir == 1 ? endPrice - h * math.abs(level_2_end) : endPrice + h * math.abs(level_2_end)
-            box bx2 = box.new(endTime, math.max(t1, t2), time, math.min(t1, t2), xloc = xloc.bar_time, bgcolor = targetColor, border_color = na, extend = extend.right)
+            // Extension: расширение fibExt1–fibExt2 за конец свинга
+            float ext_near = dir == 1 ? endPrice + h * (fibExt1 - 1.0) : endPrice - h * (fibExt1 - 1.0)
+            float ext_far  = dir == 1 ? endPrice + h * (fibExt2 - 1.0) : endPrice - h * (fibExt2 - 1.0)
+            box bx2 = box.new(endTime, math.max(ext_near, ext_far), time, math.min(ext_near, ext_far),
+                              xloc = xloc.bar_time, bgcolor = fibExtColor,
+                              border_color = color.new(#00BCD4, 30), extend = extend.right)
             array.push(boxArray2, bx2)
             manage_array_of_boxes(boxArray2, max_size)
+// =============== TP / ALERT HELPERS ===============
+// Единая точка вычисления TP1/TP2/TP3 — устраняет ~5 одинаковых блоков.
+f_compute_tps(bool isLong, float entry, float sl, float fvgTP, float baseTP) =>
+    float t1 = na
+    float t2 = na
+    float t3 = na
+    if tp_mode == 'Prioritized (TP1/TP2/TP3)'
+        t1 := fvgAsTP and not na(fvgTP) ? fvgTP : f_pick_tp_conditional(isLong, entry, sl, tp1_p1, tp1_p2, tp1_p3, tp1_min_rr, tp1_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+        t2 := f_pick_tp_conditional(isLong, entry, sl, tp2_p1, tp2_p2, tp2_p3, tp2_min_rr, tp2_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+        t3 := f_pick_tp_conditional(isLong, entry, sl, tp3_p1, tp3_p2, tp3_p3, tp3_min_rr, tp3_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
+    else
+        t1 := baseTP
+    [t1, t2, t3]
+
+// Единый построитель текста алерта — устраняет дублирование BUY/SELL блоков.
+f_build_alert_msg(string direction, string reason, string session_ctx, float entry, float sl, float tp1, float tp2, float tp3) =>
+    string pfmt = '#.#####'
+    string tp_block = not na(tp1) or not na(tp2) or not na(tp3) ?
+         'TP1: ' + (na(tp1) ? '—' : str.tostring(tp1, pfmt)) +
+         (na(tp2) ? '' : '\nTP2: ' + str.tostring(tp2, pfmt)) +
+         (na(tp3) ? '' : '\nTP3: ' + str.tostring(tp3, pfmt)) :
+         'Take-Profit: ' + str.tostring(tp1, pfmt)
+    str.format('{0} Setup on {1}\nПричина: {2}{3}\n\nEntry: {4}\nStop-Loss: {5}\n{6}',
+         direction, syminfo.tickerid, reason, session_ctx,
+         str.tostring(entry, pfmt), str.tostring(sl, pfmt), tp_block)
+
 // =============== СБОР МУСОРА ПО ИСТОРИИ ===============
 var int lastBarIdx = bar_index
 if bar_index - lastBarIdx > 0 and bar_index > history_depth
@@ -784,7 +866,7 @@ if isNewPivot
         ltf_protected_low_time := lowTime
         if ltf_trend == 0
             ltf_trend := -1
-    draw_fib_blocks(startPrice, lastP.start.time, endPrice, lastP.end.time, fillColBull_1, fillColBull_2, ltf_fibBoxes1, ltf_fibBoxes2, maxPastSwings)
+    draw_fib_blocks(startPrice, lastP.start.time, endPrice, lastP.end.time, ltf_fibBoxes1, ltf_fibBoxes2, maxPastSwings)
     if showVisual and show01Lines
         array.push(ltf_lines0, line.new(lastP.start.time, startPrice, lastP.end.time, startPrice, xloc = xloc.bar_time, color = lineColor, style = line.style_dashed, extend = extend.right))
         array.push(ltf_lines1, line.new(lastP.start.time, endPrice, lastP.end.time, endPrice, xloc = xloc.bar_time, color = lineColor, style = line.style_dashed, extend = extend.right))
@@ -815,7 +897,7 @@ if mtf_enabled
                 int endTime = time[mtf_depth]
                 array.push(mtf_structurePoints, BreakPoint.new(endPrice, endTime, true, false, na))
                 array.push(mtf_structurePoints, BreakPoint.new(startPrice, startTime, false, false, na))
-                draw_fib_blocks(startPrice, startTime, endPrice, endTime, mtf_fillColBull_1, mtf_fillColBull_2, mtf_fibBoxes1, mtf_fibBoxes2, maxPastSwings)
+                draw_fib_blocks(startPrice, startTime, endPrice, endTime, mtf_fibBoxes1, mtf_fibBoxes2, maxPastSwings)
                 if array.size(mtf_fibBoxes1) > 0
                     array.push(mtf_supply_zones, array.get(mtf_fibBoxes1, array.size(mtf_fibBoxes1) - 1))
                 mtf_swing_direction := 1
@@ -831,7 +913,7 @@ if mtf_enabled
                 int endTime = time[mtf_depth]
                 array.push(mtf_structurePoints, BreakPoint.new(startPrice, startTime, true, false, na))
                 array.push(mtf_structurePoints, BreakPoint.new(endPrice, endTime, false, false, na))
-                draw_fib_blocks(startPrice, startTime, endPrice, endTime, mtf_fillColBull_1, mtf_fillColBull_2, mtf_fibBoxes1, mtf_fibBoxes2, maxPastSwings)
+                draw_fib_blocks(startPrice, startTime, endPrice, endTime, mtf_fibBoxes1, mtf_fibBoxes2, maxPastSwings)
                 if array.size(mtf_fibBoxes1) > 0
                     array.push(mtf_demand_zones, array.get(mtf_fibBoxes1, array.size(mtf_fibBoxes1) - 1))
                 mtf_swing_direction := -1
@@ -894,8 +976,7 @@ if showReversalSignals
                 rawRev := rawRev + 1
                 bool isHtfZoneOk = not filterByHtfZone or priceInHtfDemand
                 bool isTradeModeOk = tradingMode == 'Intraday' or tradingMode == 'Swing' and isMtfBullish
-                bool isSessionOk = f_is_signal_allowed_by_session('Reversal')
-                if isTradeModeOk and isHtfZoneOk and isSessionOk and allFiltersOK(true, 'Reversal')
+                if isTradeModeOk and isHtfZoneOk and allFiltersOK(true, 'Reversal')
                     passRev := passRev + 1
                     
                     // Подготовка сигнала
@@ -911,26 +992,15 @@ if showReversalSignals
                     float fvgTP = fvgAsTP ? f_get_opposite_fvg_target(true, entryPrice) : na
                     float takeProfit = not na(fvgTP) ? fvgTP : (tp_mode == 'Risk/Reward' ? baseTP : tp_mode == 'Liquidity Target' and not na(liqTP) ? liqTP : baseTP)
                     bool isLong = true
-                    
-                    // compute TP1/TP2/TP3 (only active in Prioritized mode)
-                    float t1 = na
-                    float t2 = na
-                    float t3 = na
-                    if tp_mode == 'Prioritized (TP1/TP2/TP3)'
-                        t1 := fvgAsTP and not na(fvgTP) ? fvgTP : f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp1_p1, tp1_p2, tp1_p3, tp1_min_rr, tp1_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                        t2 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp2_p1, tp2_p2, tp2_p3, tp2_min_rr, tp2_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                        t3 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp3_p1, tp3_p2, tp3_p3, tp3_min_rr, tp3_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                    else
-                        t1 := takeProfit
-                        
-                    // Устанавливаем сигнал для обработки в конце
-                    newBuySignal := true
-                    signalEntry := entryPrice
-                    signalSL := stopLoss
-                    signalTP1 := t1
-                    signalTP2 := t2
-                    signalTP3 := t3
-                    signalReason := "Exhaustion Reversal"
+                    [float t1, float t2, float t3] = f_compute_tps(isLong, entryPrice, stopLoss, fvgTP, takeProfit)
+
+                    newBuySignal  := true
+                    signalEntry   := entryPrice
+                    signalSL      := stopLoss
+                    signalTP1     := t1
+                    signalTP2     := t2
+                    signalTP3     := t3
+                    signalReason  := 'Exhaustion Reversal'
                     lastSignalType := 'BUY'
                     
                     if showVisual
@@ -947,8 +1017,7 @@ if showReversalSignals
                 rawRev := rawRev + 1
                 bool isHtfZoneOk = not filterByHtfZone or priceInHtfSupply
                 bool isTradeModeOk = tradingMode == 'Intraday' or tradingMode == 'Swing' and isMtfBearish
-                bool isSessionOk = f_is_signal_allowed_by_session('Reversal')
-                if isTradeModeOk and isHtfZoneOk and isSessionOk and allFiltersOK(false, 'Reversal')
+                if isTradeModeOk and isHtfZoneOk and allFiltersOK(false, 'Reversal')
                     passRev := passRev + 1
                     
                     // Подготовка сигнала
@@ -964,26 +1033,15 @@ if showReversalSignals
                     float fvgTP = fvgAsTP ? f_get_opposite_fvg_target(false, entryPrice) : na
                     float takeProfit = not na(fvgTP) ? fvgTP : (tp_mode == 'Risk/Reward' ? baseTP : tp_mode == 'Liquidity Target' and not na(liqTP) ? liqTP : baseTP)
                     bool isLong = false
-                    
-                    // compute TP1/TP2/TP3 (only active in Prioritized mode)
-                    float t1 = na
-                    float t2 = na
-                    float t3 = na
-                    if tp_mode == 'Prioritized (TP1/TP2/TP3)'
-                        t1 := fvgAsTP and not na(fvgTP) ? fvgTP : f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp1_p1, tp1_p2, tp1_p3, tp1_min_rr, tp1_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                        t2 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp2_p1, tp2_p2, tp2_p3, tp2_min_rr, tp2_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                        t3 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp3_p1, tp3_p2, tp3_p3, tp3_min_rr, tp3_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                    else
-                        t1 := takeProfit
-                        
-                    // Устанавливаем сигнал для обработки в конце
-                    newSellSignal := true
-                    signalEntry := entryPrice
-                    signalSL := stopLoss
-                    signalTP1 := t1
-                    signalTP2 := t2
-                    signalTP3 := t3
-                    signalReason := "Exhaustion Reversal"
+                    [float t1, float t2, float t3] = f_compute_tps(isLong, entryPrice, stopLoss, fvgTP, takeProfit)
+
+                    newSellSignal  := true
+                    signalEntry    := entryPrice
+                    signalSL       := stopLoss
+                    signalTP1      := t1
+                    signalTP2      := t2
+                    signalTP3      := t3
+                    signalReason   := 'Exhaustion Reversal'
                     lastSignalType := 'SELL'
                     
                     if showVisual
@@ -1016,8 +1074,7 @@ if showBreakEvents and array.size(ltf_breakPoints) > 0
                         if showSweepSignals
                             bool isHtfZoneOk = not filterByHtfZone or priceInHtfSupply
                             bool isTradeModeOk = tradingMode == 'Intraday' or tradingMode == 'Swing' and isMtfBearish
-                            bool isSessionOk = f_is_signal_allowed_by_session('Sweep')
-                            if isTradeModeOk and isHtfZoneOk and isSessionOk and allFiltersOK(false, 'Sweep')
+                            if isTradeModeOk and isHtfZoneOk and allFiltersOK(false, 'Sweep')
                                 passSwp := passSwp + 1
                                 
                                 // Подготовка сигнала
@@ -1031,26 +1088,15 @@ if showBreakEvents and array.size(ltf_breakPoints) > 0
                                 float fvgTP = fvgAsTP ? f_get_opposite_fvg_target(false, entryPrice) : na
                                 float takeProfit = not na(fvgTP) ? fvgTP : (tp_mode == 'Risk/Reward' ? baseTP : tp_mode == 'Liquidity Target' and not na(liqTP) ? liqTP : baseTP)
                                 bool isLong = false
-                                
-                                // compute TP1/TP2/TP3 (only active in Prioritized mode)
-                                float t1 = na
-                                float t2 = na
-                                float t3 = na
-                                if tp_mode == 'Prioritized (TP1/TP2/TP3)'
-                                    t1 := fvgAsTP and not na(fvgTP) ? fvgTP : f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp1_p1, tp1_p2, tp1_p3, tp1_min_rr, tp1_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                                    t2 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp2_p1, tp2_p2, tp2_p3, tp2_min_rr, tp2_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                                    t3 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp3_p1, tp3_p2, tp3_p3, tp3_min_rr, tp3_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                                else
-                                    t1 := takeProfit
-                                    
-                                // Устанавливаем сигнал для обработки в конце
-                                newSellSignal := true
-                                signalEntry := entryPrice
-                                signalSL := stopLoss
-                                signalTP1 := t1
-                                signalTP2 := t2
-                                signalTP3 := t3
-                                signalReason := "Liquidity Sweep"
+                                [float t1, float t2, float t3] = f_compute_tps(isLong, entryPrice, stopLoss, fvgTP, takeProfit)
+
+                                newSellSignal  := true
+                                signalEntry    := entryPrice
+                                signalSL       := stopLoss
+                                signalTP1      := t1
+                                signalTP2      := t2
+                                signalTP3      := t3
+                                signalReason   := 'Liquidity Sweep'
                                 lastSignalType := 'SELL'
                                 
                                 if showVisual
@@ -1073,8 +1119,7 @@ if showBreakEvents and array.size(ltf_breakPoints) > 0
                         if showSweepSignals
                             bool isHtfZoneOk = not filterByHtfZone or priceInHtfDemand
                             bool isTradeModeOk = tradingMode == 'Intraday' or tradingMode == 'Swing' and isMtfBullish
-                            bool isSessionOk = f_is_signal_allowed_by_session('Sweep')
-                            if isTradeModeOk and isHtfZoneOk and isSessionOk and allFiltersOK(true, 'Sweep')
+                            if isTradeModeOk and isHtfZoneOk and allFiltersOK(true, 'Sweep')
                                 passSwp := passSwp + 1
                                 
                                 // Подготовка сигнала
@@ -1088,26 +1133,15 @@ if showBreakEvents and array.size(ltf_breakPoints) > 0
                                 float fvgTP = fvgAsTP ? f_get_opposite_fvg_target(true, entryPrice) : na
                                 float takeProfit = not na(fvgTP) ? fvgTP : (tp_mode == 'Risk/Reward' ? baseTP : tp_mode == 'Liquidity Target' and not na(liqTP) ? liqTP : baseTP)
                                 bool isLong = true
-                                
-                                // compute TP1/TP2/TP3 (only active in Prioritized mode)
-                                float t1 = na
-                                float t2 = na
-                                float t3 = na
-                                if tp_mode == 'Prioritized (TP1/TP2/TP3)'
-                                    t1 := fvgAsTP and not na(fvgTP) ? fvgTP : f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp1_p1, tp1_p2, tp1_p3, tp1_min_rr, tp1_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                                    t2 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp2_p1, tp2_p2, tp2_p3, tp2_min_rr, tp2_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                                    t3 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp3_p1, tp3_p2, tp3_p3, tp3_min_rr, tp3_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                                else
-                                    t1 := takeProfit
-                                    
-                                // Устанавливаем сигнал для обработки в конце
-                                newBuySignal := true
-                                signalEntry := entryPrice
-                                signalSL := stopLoss
-                                signalTP1 := t1
-                                signalTP2 := t2
-                                signalTP3 := t3
-                                signalReason := "Liquidity Sweep"
+                                [float t1, float t2, float t3] = f_compute_tps(isLong, entryPrice, stopLoss, fvgTP, takeProfit)
+
+                                newBuySignal   := true
+                                signalEntry    := entryPrice
+                                signalSL       := stopLoss
+                                signalTP1      := t1
+                                signalTP2      := t2
+                                signalTP3      := t3
+                                signalReason   := 'Liquidity Sweep'
                                 lastSignalType := 'BUY'
                                 
                                 if showVisual
@@ -1141,8 +1175,7 @@ if showTrendSignals and not na(ltf_trend_signal_box)
         bool htfContext = isLong ? priceInHtfDemand : priceInHtfSupply
         bool isHtfZoneOk = not filterByHtfZone or htfContext
         bool isTradeModeOk = tradingMode == 'Intraday' or tradingMode == 'Swing' and (isLong ? isMtfBullish : isMtfBearish)
-        bool isSessionOk = f_is_signal_allowed_by_session('Trend')
-        if isTradeModeOk and isHtfZoneOk and isSessionOk and allFiltersOK(isLong, 'Trend')
+        if isTradeModeOk and isHtfZoneOk and allFiltersOK(isLong, 'Trend')
             passTrd := passTrd + 1
             float entryPrice = isLong ? math.min(open, top) : math.max(open, bottom)
             
@@ -1155,28 +1188,18 @@ if showTrendSignals and not na(ltf_trend_signal_box)
             float fvgTP = fvgAsTP ? f_get_opposite_fvg_target(isLong, entryPrice) : na
             float takeProfit = not na(fvgTP) ? fvgTP : (tp_mode == 'Risk/Reward' ? baseTP : tp_mode == 'Liquidity Target' and not na(liqTP) ? liqTP : baseTP)
             
-            // compute TP1/TP2/TP3 (only active in Prioritized mode)
-            float t1 = na
-            float t2 = na
-            float t3 = na
-            if tp_mode == 'Prioritized (TP1/TP2/TP3)'
-                t1 := fvgAsTP and not na(fvgTP) ? fvgTP : f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp1_p1, tp1_p2, tp1_p3, tp1_min_rr, tp1_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                t2 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp2_p1, tp2_p2, tp2_p3, tp2_min_rr, tp2_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                t3 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp3_p1, tp3_p2, tp3_p3, tp3_min_rr, tp3_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-            else
-                t1 := takeProfit
-                
-            // Устанавливаем сигнал для обработки в конце
+            [float t1, float t2, float t3] = f_compute_tps(isLong, entryPrice, stopLoss, fvgTP, takeProfit)
+
             if isLong
                 newBuySignal := true
             else
                 newSellSignal := true
-            signalEntry := entryPrice
-            signalSL := stopLoss
-            signalTP1 := t1
-            signalTP2 := t2
-            signalTP3 := t3
-            signalReason := "Trend Pullback"
+            signalEntry    := entryPrice
+            signalSL       := stopLoss
+            signalTP1      := t1
+            signalTP2      := t2
+            signalTP3      := t3
+            signalReason   := 'Trend Pullback'
             lastSignalType := isLong ? 'BUY' : 'SELL'
             
             if showVisual
@@ -1218,13 +1241,12 @@ if needFvgProcessing and bar_index > 4
             bool removeZone = false
 
             if oldEnough and sizeOk and priceTouched
-                bool sessionOk = f_is_signal_allowed_by_session('FVG')
                 bool inHtfZoneLong = not filterByHtfZone or priceInHtfDemand
                 bool inHtfZoneShort = not filterByHtfZone or priceInHtfSupply
                 bool tradeModeLongOk = tradingMode == 'Intraday' or (tradingMode == 'Swing' and isMtfBullish)
                 bool tradeModeShortOk = tradingMode == 'Intraday' or (tradingMode == 'Swing' and isMtfBearish)
 
-                if useInversionFvg and inversionBreak and strategy.position_size == 0 and sessionOk
+                if useInversionFvg and inversionBreak and strategy.position_size == 0
                     bool isLong = not fvg.isBullish
                     bool htfOk = isLong ? inHtfZoneLong : inHtfZoneShort
                     bool tradeModeOk = isLong ? tradeModeLongOk : tradeModeShortOk
@@ -1238,33 +1260,25 @@ if needFvgProcessing and bar_index > 4
                         float fvgTP = fvgAsTP ? f_get_opposite_fvg_target(isLong, entryPrice) : na
                         float takeProfit = not na(fvgTP) ? fvgTP : (tp_mode == 'Liquidity Target' and not na(liqTP) ? liqTP : baseTP)
 
-                        float t1 = na
-                        float t2 = na
-                        float t3 = na
-                        if tp_mode == 'Prioritized (TP1/TP2/TP3)'
-                            t1 := fvgAsTP and not na(fvgTP) ? fvgTP : f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp1_p1, tp1_p2, tp1_p3, tp1_min_rr, tp1_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                            t2 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp2_p1, tp2_p2, tp2_p3, tp2_min_rr, tp2_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                            t3 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp3_p1, tp3_p2, tp3_p3, tp3_min_rr, tp3_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                        else
-                            t1 := takeProfit
+                        [float t1, float t2, float t3] = f_compute_tps(isLong, entryPrice, stopLoss, fvgTP, takeProfit)
 
                         if isLong and entryPrice > stopLoss or not isLong and entryPrice < stopLoss
                             if isLong
                                 newBuySignal := true
                             else
                                 newSellSignal := true
-                            signalEntry := entryPrice
-                            signalSL := stopLoss
-                            signalTP1 := t1
-                            signalTP2 := t2
-                            signalTP3 := t3
-                            signalReason := 'Inversion FVG'
+                            signalEntry    := entryPrice
+                            signalSL       := stopLoss
+                            signalTP1      := t1
+                            signalTP2      := t2
+                            signalTP3      := t3
+                            signalReason   := 'Inversion FVG'
                             lastSignalType := isLong ? 'BUY' : 'SELL'
                             if showVisual
                                 f_register_fvg_marker(ifvg_labels, f_fvg_mid(fvg), 'IFVG', isLong ? buyColor : sellColor, isLong)
                         removeZone := true
 
-                if not removeZone and useFvgSignals and closeInside and strategy.position_size == 0 and sessionOk
+                if not removeZone and useFvgSignals and closeInside and strategy.position_size == 0
                     bool isLong = fvg.isBullish
                     bool htfOk = isLong ? inHtfZoneLong : inHtfZoneShort
                     bool tradeModeOk = isLong ? tradeModeLongOk : tradeModeShortOk
@@ -1278,27 +1292,19 @@ if needFvgProcessing and bar_index > 4
                         float fvgTP = fvgAsTP ? f_get_opposite_fvg_target(isLong, entryPrice) : na
                         float takeProfit = not na(fvgTP) ? fvgTP : (tp_mode == 'Liquidity Target' and not na(liqTP) ? liqTP : baseTP)
 
-                        float t1 = na
-                        float t2 = na
-                        float t3 = na
-                        if tp_mode == 'Prioritized (TP1/TP2/TP3)'
-                            t1 := fvgAsTP and not na(fvgTP) ? fvgTP : f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp1_p1, tp1_p2, tp1_p3, tp1_min_rr, tp1_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                            t2 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp2_p1, tp2_p2, tp2_p3, tp2_min_rr, tp2_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                            t3 := f_pick_tp_conditional(isLong, entryPrice, stopLoss, tp3_p1, tp3_p2, tp3_p3, tp3_min_rr, tp3_rr_fix, ltf_breakPoints, ltf_fibBoxes2)
-                        else
-                            t1 := takeProfit
+                        [float t1, float t2, float t3] = f_compute_tps(isLong, entryPrice, stopLoss, fvgTP, takeProfit)
 
                         if isLong and entryPrice > stopLoss or not isLong and entryPrice < stopLoss
                             if isLong
                                 newBuySignal := true
                             else
                                 newSellSignal := true
-                            signalEntry := entryPrice
-                            signalSL := stopLoss
-                            signalTP1 := t1
-                            signalTP2 := t2
-                            signalTP3 := t3
-                            signalReason := 'FVG Fill'
+                            signalEntry    := entryPrice
+                            signalSL       := stopLoss
+                            signalTP1      := t1
+                            signalTP2      := t2
+                            signalTP3      := t3
+                            signalReason   := 'FVG Fill'
                             lastSignalType := isLong ? 'BUY' : 'SELL'
                             if showVisual
                                 f_register_fvg_marker(fvg_fill_labels, f_fvg_mid(fvg), 'FVG', isLong ? buyColor : sellColor, isLong)
@@ -1411,8 +1417,10 @@ if useWyckoff and strategy.position_size == 0 and not newBuySignal and not newSe
             signalTP1 := takeProfit
             signalTP2 := entryPrice + risk * rr_ratio * 1.5
             signalTP3 := entryPrice + risk * rr_ratio * 2.0
-            signalReason := "Wyckoff Spring"
-            lastSignalType := 'BUY'
+            signalReason    := 'Wyckoff Spring'
+            lastSignalType  := 'BUY'
+            springActive    := false   // предотвращает повторный вход до нового потенциального Spring
+            springConfirmed := false
             if showVisual
                 label.new(bar_index, low, 'BUY', style=label.style_label_up, color=color(na), textcolor=buyColor, size=size.large)
     
@@ -1431,8 +1439,10 @@ if useWyckoff and strategy.position_size == 0 and not newBuySignal and not newSe
             signalTP1 := takeProfit
             signalTP2 := entryPrice - risk * rr_ratio * 1.5
             signalTP3 := entryPrice - risk * rr_ratio * 2.0
-            signalReason := "Wyckoff Upthrust"
-            lastSignalType := 'SELL'
+            signalReason      := 'Wyckoff Upthrust'
+            lastSignalType    := 'SELL'
+            upthrustActive    := false   // предотвращает повторный вход до нового Upthrust
+            upthrustConfirmed := false
             if showVisual
                 label.new(bar_index, high, 'SELL', style=label.style_label_down, color=color(na), textcolor=sellColor, size=size.large)
     
@@ -1476,6 +1486,14 @@ if useWyckoff and strategy.position_size == 0 and not newBuySignal and not newSe
             if showVisual
                 label.new(bar_index, high, 'SELL', style=label.style_label_down, color=color(na), textcolor=sellColor, size=size.large)
 
+// =============== CONFLUENCE DETECTION ===============
+// Wyckoff-фаза подтверждает SMC-сигнал — используется для увеличения размера позиции
+bool signalIsWyckoff = signalReason == 'Wyckoff Spring' or signalReason == 'Wyckoff Upthrust' or signalReason == 'Sign of Strength' or signalReason == 'Sign of Weakness'
+bool wyckoffBullCtx  = inAccumulation or springConfirmed
+bool wyckoffBearCtx  = inDistribution or upthrustConfirmed
+bool signalConfluence = useConfluenceBonus and not signalIsWyckoff and
+     ((newBuySignal and wyckoffBullCtx) or (newSellSignal and wyckoffBearCtx))
+
 // =============== TP/SL MONITORING ===============
 f_level_hit_up(lvl) => strictMode ? (high[1] < lvl and high >= lvl) : (high >= lvl)
 f_level_hit_down(lvl) => strictMode ? (low[1] > lvl and low <= lvl) : (low <= lvl)
@@ -1504,6 +1522,11 @@ if (posLong or posShort) and posTPstage < 3 and not na(posTP3)
     if hit3
         tp3Hit := true
         posTPstage := 3
+        // Win Rate: считаем только TP3 (финальный выход) как "выигрыш"
+        tpFinalHits := tpFinalHits + 1
+        if not na(posTP3) and not na(posEntry) and not na(posSL)
+            float riskSz = math.max(math.abs(posEntry - posSL), syminfo.mintick)
+            totalWinR := totalWinR + math.abs(posTP3 - posEntry) / riskSz
         if alertOnTPs and enableAlerts
             alert('TP3 reached on ' + syminfo.ticker, alert.freq_once_per_bar_close)
         // Сброс позиции после финального TP
@@ -1524,6 +1547,12 @@ slDynamic = moveSLtoBE and slMovedToBE ? posEntry : posSL
 if (posLong or posShort) and not na(slDynamic)
     bool stopHit = posLong ? f_level_hit_down(slDynamic) : f_level_hit_up(slDynamic)
     if stopHit
+        // Win Rate + Daily Limit
+        slTotalHits  := slTotalHits + 1
+        dailySLcount := dailySLcount + 1
+        if not na(posEntry) and not na(slDynamic)
+            float riskSz = math.max(math.abs(posEntry - posSL), syminfo.mintick)
+            totalLossR := totalLossR + math.abs(slDynamic - posEntry) / riskSz
         if alertOnSL and enableAlerts
             alert('SL reached on ' + syminfo.ticker, alert.freq_once_per_bar_close)
         // Сброс состояния позиции
@@ -1564,7 +1593,7 @@ f_get_nearest_htf_demand() =>
                 float bottom = box.get_bottom(bx)
                 txt := str.tostring(top, '#.#####') + ' - ' + str.tostring(bottom, '#.#####')
     txt
-var dashboard = table.new(f_get_position(dashboardPosition), 2, 16, border_width = 1)
+var dashboard = table.new(f_get_position(dashboardPosition), 2, 22, border_width = 1)
 if showDashboard and barstate.islast
     string htf_trend_label = 'Тренд HTF (' + mtf_timeframe + ')'
     string htf_trend_text = mtf_swing_direction == 1 ? 'БЫЧИЙ' : mtf_swing_direction == -1 ? 'МЕДВЕЖИЙ' : 'НЕЙТРАЛЬНЫЙ'
@@ -1646,10 +1675,50 @@ if showDashboard and barstate.islast
     color ut_status_color = upthrustConfirmed ? color.new(upthrustColor, 70) : upthrustActive ? color.new(color.orange, 70) : color.new(color.gray, 70)
     table.cell(dashboard, 0, 15, '🔴 Upthrust', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
     table.cell(dashboard, 1, 15, ut_status, text_halign = text.align_right, text_color = c_text, bgcolor = ut_status_color)
+    // ── Win Rate & Expected Value ─────────────────────────────────────────────
+    int totalTrades = tpFinalHits + slTotalHits
+    float winRate   = totalTrades > 0 ? tpFinalHits / totalTrades * 100.0 : na
+    float avgWinR   = tpFinalHits  > 0 ? totalWinR  / tpFinalHits  : na
+    float avgLossR  = slTotalHits  > 0 ? totalLossR / slTotalHits  : na
+    float ev        = not na(winRate) and not na(avgWinR) and not na(avgLossR) ?
+         (winRate / 100.0 * avgWinR) - ((1.0 - winRate / 100.0) * avgLossR) : na
+    string wr_text  = na(winRate) ? '—' :
+         str.tostring(winRate, '#.#') + '%  (' + str.tostring(tpFinalHits) + '/' + str.tostring(totalTrades) + ')'
+    color  wr_color = na(winRate) ? c_bg : winRate >= 50 ? color.new(color.green, 70) : color.new(color.red, 70)
+    string ev_text  = na(ev) ? '—' : (ev >= 0 ? '+' : '') + str.tostring(ev, '#.##') + 'R'
+    color  ev_color = na(ev) ? c_bg : ev >= 0 ? color.new(color.green, 70) : color.new(color.red, 70)
+    table.cell(dashboard, 0, 16, '📊 Win Rate (TP3)', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 16, wr_text, text_halign = text.align_right, text_color = c_text, bgcolor = wr_color)
+    table.cell(dashboard, 0, 17, '⚡ Exp. Value (EV)', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 17, ev_text, text_halign = text.align_right, text_color = c_text, bgcolor = ev_color)
+    // ── Daily Loss Limit ──────────────────────────────────────────────────────
+    string dl_text  = not useDailyLossLimit ? 'OFF' :
+         str.tostring(dailySLcount) + '/' + str.tostring(dailyMaxSL) + ' SL сегодня'
+    color  dl_color = not useDailyLossLimit ? c_bg :
+         dailySLcount >= dailyMaxSL ? color.new(color.red, 50) :
+         dailySLcount >= dailyMaxSL - 1 ? color.new(color.orange, 60) : color.new(color.green, 70)
+    table.cell(dashboard, 0, 18, '🛡 Daily Limit', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 18, dl_text, text_halign = text.align_right, text_color = c_text, bgcolor = dl_color)
+    // ── Session Breakdown ─────────────────────────────────────────────────────
+    table.cell(dashboard, 0, 19, '─ Сессия / Сигналы ─', text_halign = text.align_center, text_color = c_lbl, bgcolor = c_bg)
+    table.merge_cells(dashboard, 0, 19, 1, 19)
+    table.cell(dashboard, 0, 20, 'Asia / London / NYa / NYp', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 20,
+         str.tostring(asia_signal_count) + ' / ' +
+         str.tostring(london_signal_count) + ' / ' +
+         str.tostring(ny_am_signal_count) + ' / ' +
+         str.tostring(ny_pm_signal_count),
+         text_halign = text.align_right, text_color = c_text, bgcolor = c_bg)
+    // Confluence bonus indicator
+    string conf_text = not useConfluenceBonus ? 'OFF' : signalConfluence ? '✓ ACTIVE ×' + str.tostring(confluenceMult, '#.#') : '—'
+    color  conf_color = signalConfluence ? color.new(color.yellow, 60) : c_bg
+    table.cell(dashboard, 0, 21, '🔗 Confluence ×', text_halign = text.align_left, text_color = c_lbl, bgcolor = c_bg)
+    table.cell(dashboard, 1, 21, conf_text, text_halign = text.align_right, text_color = c_text, bgcolor = conf_color)
 // =============== СТРАТЕГИЧЕСКИЕ ЗАЯВКИ (В КОНЦЕ!) ===============
 // ENTRY ORDERS (только если нет позиции)
-if newBuySignal and strategy.position_size == 0
-    float qty = f_calculate_qty(signalEntry, signalSL)
+if newBuySignal and strategy.position_size == 0 and dailyLimitOK
+    float confMult = signalConfluence ? confluenceMult : 1.0
+    float qty = f_calculate_qty(signalEntry, signalSL) * confMult
     strategy.entry('L', strategy.long, qty = qty, alert_message = '"reduceOnly": false')
     
     // Сохраняем состояние позиции
@@ -1668,11 +1737,8 @@ if newBuySignal and strategy.position_size == 0
     // Алерт
     bool canAlert = f_canAlert(true) and (not alertsRespectScanner or passScanner)
     if canAlert and enableAlerts
-        string pfmt = "#.#####"
-        string session_context = na(active_session_name) ? "" : "\nСессия: " + active_session_name
-        string tp_block = (not na(signalTP1) or not na(signalTP2) or not na(signalTP3)) ? ("TP1: " + (na(signalTP1) ? "—" : str.tostring(signalTP1, pfmt)) + (na(signalTP2) ? "" : "\nTP2: " + str.tostring(signalTP2, pfmt)) + (na(signalTP3) ? "" : "\nTP3: " + str.tostring(signalTP3, pfmt))) : ("Take-Profit: " + str.tostring(signalTP1, pfmt))
-        string msg = str.format("BUY Setup on {0}\nПричина: {1}{2}\n\nEntry: {3}\nStop-Loss: {4}\n{5}", syminfo.tickerid, signalReason, session_context, str.tostring(signalEntry, pfmt), str.tostring(signalSL, pfmt), tp_block)
-        alert(msg, alert.freq_once_per_bar_close)
+        string session_context = na(active_session_name) ? '' : '\nСессия: ' + active_session_name
+        alert(f_build_alert_msg('BUY', signalReason, session_context, signalEntry, signalSL, signalTP1, signalTP2, signalTP3), alert.freq_once_per_bar_close)
         
         if barstate.isconfirmed
             lastBuyBar := bar_index
@@ -1682,8 +1748,9 @@ if newBuySignal and strategy.position_size == 0
         int w = time + (time - time[1]) * 60
         box.new(time, signalEntry, w, signalSL, border_color = na, bgcolor = riskColor, xloc = xloc.bar_time)
         box.new(time, signalEntry, w, signalTP1, border_color = na, bgcolor = rewardColor, xloc = xloc.bar_time)
-if newSellSignal and strategy.position_size == 0
-    float qty = f_calculate_qty(signalEntry, signalSL)
+if newSellSignal and strategy.position_size == 0 and dailyLimitOK
+    float confMult = signalConfluence ? confluenceMult : 1.0
+    float qty = f_calculate_qty(signalEntry, signalSL) * confMult
     strategy.entry('S', strategy.short, qty = qty, alert_message = '"reduceOnly": false')
     
     // Сохраняем состояние позиции
@@ -1702,11 +1769,8 @@ if newSellSignal and strategy.position_size == 0
     // Алерт
     bool canAlert = f_canAlert(false) and (not alertsRespectScanner or passScanner)
     if canAlert and enableAlerts
-        string pfmt = "#.#####"
-        string session_context = na(active_session_name) ? "" : "\nСессия: " + active_session_name
-        string tp_block = (not na(signalTP1) or not na(signalTP2) or not na(signalTP3)) ? ("TP1: " + (na(signalTP1) ? "—" : str.tostring(signalTP1, pfmt)) + (na(signalTP2) ? "" : "\nTP2: " + str.tostring(signalTP2, pfmt)) + (na(signalTP3) ? "" : "\nTP3: " + str.tostring(signalTP3, pfmt))) : ("Take-Profit: " + str.tostring(signalTP1, pfmt))
-        string msg = str.format("SELL Setup on {0}\nПричина: {1}{2}\n\nEntry: {3}\nStop-Loss: {4}\n{5}", syminfo.tickerid, signalReason, session_context, str.tostring(signalEntry, pfmt), str.tostring(signalSL, pfmt), tp_block)
-        alert(msg, alert.freq_once_per_bar_close)
+        string session_context = na(active_session_name) ? '' : '\nСессия: ' + active_session_name
+        alert(f_build_alert_msg('SELL', signalReason, session_context, signalEntry, signalSL, signalTP1, signalTP2, signalTP3), alert.freq_once_per_bar_close)
         
         if barstate.isconfirmed
             lastSellBar := bar_index
